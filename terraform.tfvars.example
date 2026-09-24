@@ -1,0 +1,45 @@
+aws_region   = "us-east-1"
+environment  = "dev"
+project_name = "sagemaker-platform"
+
+# Optional: Override VPC/subnets (defaults to default VPC)
+# vpc_id     = "vpc-xxxxx"
+# subnet_ids = ["subnet-xxxxx", "subnet-yyyyy"]
+
+teams = {
+  fraud = {
+    members = ["alice", "bob"]
+    email_alerts = []  # Add real emails in production
+    monthly_budget_usd = 1000
+    allowed_instance_types = [
+      "ml.t3.medium",
+      "ml.t3.large",
+      "ml.m5.xlarge",
+      "ml.m5.2xlarge"
+    ]
+  }
+
+  recsys = {
+    members = ["charlie", "diana"]
+    email_alerts = []  # Add real emails in production
+    monthly_budget_usd = 1500
+    allowed_instance_types = [
+      "ml.t3.medium",
+      "ml.m5.xlarge",
+      "ml.m5.2xlarge",
+      "ml.c5.2xlarge"
+    ]
+  }
+}
+
+# Reaper settings
+reaper_enabled               = false  # Set true to enable deletion (defaults to report-only)
+reaper_endpoint_idle_days    = 7
+reaper_studio_app_idle_hours = 24
+studio_idle_timeout_minutes  = 60
+
+# Smoke test settings (disable in production)
+enable_smoke_test_assume = true
+
+# Platform alerts
+platform_alert_emails = []  # Add platform team emails
