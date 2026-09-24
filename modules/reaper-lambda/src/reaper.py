@@ -197,18 +197,29 @@ def find_idle_studio_apps() -> List[Dict]:
                     continue
                 
                 domain_id = app['DomainId']
-                user_profile_name = app['UserProfileName']
+                user_profile_name = app.get('UserProfileName')
+                space_name = app.get('SpaceName')
                 app_type = app['AppType']
                 app_name = app['AppName']
                 
                 # Get app details
                 try:
-                    app_details = sagemaker.describe_app(
-                        DomainId=domain_id,
-                        UserProfileName=user_profile_name,
-                        AppType=app_type,
-                        AppName=app_name
-                    )
+                    if space_name:
+                        app_details = sagemaker.describe_app(
+                            DomainId=domain_id,
+                            SpaceName=space_name,
+                            AppType=app_type,
+                            AppName=app_name
+                        )
+                        owner_name = space_name
+                    else:
+                        app_details = sagemaker.describe_app(
+                            DomainId=domain_id,
+                            UserProfileName=user_profile_name,
+                            AppType=app_type,
+                            AppName=app_name
+                        )
+                        owner_name = user_profile_name
                     
                     # Check if app is idle based on last modified time
                     last_modified = app_details.get('LastUserActivityTimestamp', 
@@ -218,18 +229,27 @@ def find_idle_studio_apps() -> List[Dict]:
                         age_hours = (datetime.now(last_modified.tzinfo) - last_modified).total_seconds() / 3600
                         
                         if age_hours > STUDIO_APP_IDLE_HOURS:
-                            # Extract team from user profile tags
-                            team = extract_team_from_profile(domain_id, user_profile_name)
+                            # Extract team from user profile or space name
+                            if user_profile_name:
+                                team = extract_team_from_profile(domain_id, user_profile_name)
+                            else:
+                                team = extract_team_from_profile(domain_id, space_name)
                             
-                            idle_apps.append({
+                            app_entry = {
                                 'domain_id': domain_id,
-                                'user_profile_name': user_profile_name,
                                 'app_type': app_type,
                                 'app_name': app_name,
                                 'team': team,
                                 'idle_hours': int(age_hours)
-                            })
-                            print(f"Found idle app: {app_name} (idle={int(age_hours)}h, team={team})")
+                            }
+                            
+                            if space_name:
+                                app_entry['space_name'] = space_name
+                            else:
+                                app_entry['user_profile_name'] = user_profile_name
+                            
+                            idle_apps.append(app_entry)
+                            print(f"Found idle app: {app_name} (idle={int(age_hours)}h, team={team}, owner={owner_name})")
                 
                 except Exception as e:
                     print(f"Error describing app {app_name}: {e}")
@@ -290,13 +310,21 @@ def delete_idle_apps(idle_apps: List[Dict]) -> List[str]:
     
     for app in idle_apps:
         try:
-            sagemaker.delete_app(
-                DomainId=app['domain_id'],
-                UserProfileName=app['user_profile_name'],
-                AppType=app['app_type'],
-                AppName=app['app_name']
-            )
-            print(f"Deleted app: {app['app_name']}")
+            delete_params = {
+                'DomainId': app['domain_id'],
+                'AppType': app['app_type'],
+                'AppName': app['app_name']
+            }
+            
+            if 'space_name' in app:
+                delete_params['SpaceName'] = app['space_name']
+                owner = f"space={app['space_name']}"
+            else:
+                delete_params['UserProfileName'] = app['user_profile_name']
+                owner = f"user={app['user_profile_name']}"
+            
+            sagemaker.delete_app(**delete_params)
+            print(f"Deleted app: {app['app_name']} ({owner})")
             deleted.append(app['app_name'])
         
         except Exception as e:

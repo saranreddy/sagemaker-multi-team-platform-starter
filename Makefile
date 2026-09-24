@@ -1,17 +1,19 @@
 .PHONY: help doctor init plan apply smoke destroy test fmt validate lint clean
 
-# Auto-approve flags for CI
-ifdef AUTO_APPROVE
-	APPROVE_FLAG := -auto-approve
+# Auto-approve flags for CI/unattended runs
+# Any of AUTO_APPROVE=1, FORCE=1, or CI=true will enable auto-approve
+TF_AUTO_APPROVE :=
+
+ifneq ($(AUTO_APPROVE),)
+	TF_AUTO_APPROVE := -auto-approve -input=false
 endif
 
-ifdef CI
-	APPROVE_FLAG := -auto-approve
+ifneq ($(FORCE),)
+	TF_AUTO_APPROVE := -auto-approve -input=false
 endif
 
-# Force flag for destroy
-ifdef FORCE
-	DESTROY_FLAG := -force
+ifneq ($(CI),)
+	TF_AUTO_APPROVE := -auto-approve -input=false
 endif
 
 help: ## Show this help message
@@ -50,14 +52,14 @@ plan: validate ## Show Terraform plan
 	terraform plan
 
 apply: validate ## Apply Terraform configuration
-	terraform apply $(APPROVE_FLAG)
+	terraform apply $(TF_AUTO_APPROVE)
 
 smoke: ## Run smoke tests (requires applied infrastructure)
 	@./scripts/smoke-test.sh
 
 destroy: ## Destroy all Terraform resources
 	@./scripts/pre-destroy.sh
-	terraform destroy $(APPROVE_FLAG)
+	terraform destroy $(TF_AUTO_APPROVE)
 
 clean: ## Clean temporary files
 	rm -rf .terraform

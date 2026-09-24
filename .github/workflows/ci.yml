@@ -95,8 +95,17 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
+      - name: Check for AWS credentials
+        id: check_aws
+        run: |
+          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "has_aws=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_aws=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Configure AWS Credentials
-        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
+        if: steps.check_aws.outputs.has_aws == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -104,13 +113,13 @@ jobs:
           aws-region: us-east-1
 
       - name: Terraform Init
-        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
+        if: steps.check_aws.outputs.has_aws == 'true'
         run: terraform init
 
       - name: Terraform Plan
-        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
+        if: steps.check_aws.outputs.has_aws == 'true'
         run: terraform plan -no-color
 
       - name: Skip Plan (No AWS Credentials)
-        if: ${{ secrets.AWS_ACCESS_KEY_ID == '' }}
+        if: steps.check_aws.outputs.has_aws == 'false'
         run: echo "Skipping plan - no AWS credentials configured"

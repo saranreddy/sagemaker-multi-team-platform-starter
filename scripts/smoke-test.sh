@@ -107,7 +107,10 @@ echo ""
 # Test 3: Test S3 isolation (if enable_smoke_test_assume is true)
 echo "Test 3: Test S3 access isolation"
 TEAMS_ARRAY=($TEAM_NAMES)
-if [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
+if [ ${#TEAMS_ARRAY[@]} -lt 2 ]; then
+    echo "  ✗ FAILED: Need at least 2 teams to test isolation (found ${#TEAMS_ARRAY[@]})"
+    ERRORS=$((ERRORS + 1))
+elif [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
     TEAM_A=${TEAMS_ARRAY[0]}
     TEAM_B=${TEAMS_ARRAY[1]}
     
@@ -162,8 +165,6 @@ if [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
         echo "    This is a critical failure when enable_smoke_test_assume=true"
         ERRORS=$((ERRORS + 1))
     fi
-else
-    echo "  ⚠ Need at least 2 teams to test isolation"
 fi
 echo ""
 

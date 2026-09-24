@@ -253,8 +253,7 @@ resource "aws_iam_role_policy" "team_execution_core" {
           "sagemaker:CreateTrainingJob",
           "sagemaker:CreateProcessingJob",
           "sagemaker:CreateTransformJob",
-          "sagemaker:CreateEndpointConfig",
-          "sagemaker:CreateApp"
+          "sagemaker:CreateEndpointConfig"
         ]
         Resource = "*"
         Condition = {
@@ -266,6 +265,23 @@ resource "aws_iam_role_policy" "team_execution_core" {
           }
           StringEquals = {
             "aws:RequestTag/Team" = var.team_name
+          }
+        }
+      },
+      # CreateApp for Studio - allow system and configured types, no RequestTag required
+      {
+        Sid    = "SageMakerCreateApp"
+        Effect = "Allow"
+        Action = [
+          "sagemaker:CreateApp"
+        ]
+        Resource = "*"
+        Condition = {
+          "ForAllValues:StringEquals" = {
+            "sagemaker:InstanceTypes" = concat(["system", "ml.t3.medium"], var.allowed_instance_types)
+          }
+          "Null" = {
+            "sagemaker:InstanceTypes" = "false"
           }
         }
       },
@@ -332,7 +348,7 @@ resource "aws_iam_role_policy" "team_execution_core" {
         ]
         Resource = [
           aws_sagemaker_model_package_group.team_registry.arn,
-          "${aws_sagemaker_model_package_group.team_registry.arn}/*"
+          "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${data.aws_caller_identity.current.account_id}:model-package/${aws_sagemaker_model_package_group.team_registry.model_package_group_name}/*"
         ]
       },
       # CloudWatch Logs

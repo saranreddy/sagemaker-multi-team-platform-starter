@@ -118,6 +118,13 @@ def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
         
         endpoint_config = sagemaker.describe_endpoint_config(EndpointConfigName=endpoint_config_name)
         variants = [variant['VariantName'] for variant in endpoint_config['ProductionVariants']]
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == 'AccessDeniedException':
+            print(f"ERROR: AccessDenied getting endpoint config for {endpoint_name}: {e}")
+            raise
+        print(f"Error getting endpoint variants: {e}, using AllTraffic as fallback")
+        variants = ['AllTraffic']
     except Exception as e:
         print(f"Error getting endpoint variants: {e}, using AllTraffic as fallback")
         variants = ['AllTraffic']
@@ -150,6 +157,12 @@ def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
                 ]
             )
             print(f"Created 5XX error alarm for {endpoint_name}/{variant_name}")
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'AccessDeniedException':
+                print(f"ERROR: AccessDenied creating 5XX alarm for {endpoint_name}: {e}")
+                raise
+            print(f"Error creating 5XX alarm: {e}")
         except Exception as e:
             print(f"Error creating 5XX alarm: {e}")
         

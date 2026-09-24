@@ -90,7 +90,7 @@ resource "aws_sagemaker_domain" "main" {
     execution_role = aws_iam_role.studio_default.arn
   }
 
-  app_network_access_type = "VpcOnly"
+  app_network_access_type = var.studio_network_access_type
 
   retention_policy {
     home_efs_file_system = "Delete"

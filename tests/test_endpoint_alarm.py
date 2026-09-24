@@ -26,7 +26,7 @@ def endpoint_event():
         'source': 'aws.sagemaker',
         'detail': {
             'EndpointName': 'fraud-model-endpoint',
-            'EndpointStatus': 'InService',
+            'EndpointStatus': 'IN_SERVICE',
             'EndpointArn': 'arn:aws:sagemaker:us-east-1:123456789:endpoint/fraud-model-endpoint'
         }
     }
@@ -40,7 +40,13 @@ def test_lambda_handler_with_team_tag(endpoint_event):
     
     # Mock endpoint description and tags
     mock_sagemaker.describe_endpoint.return_value = {
-        'EndpointArn': 'arn:aws:sagemaker:us-east-1:123:endpoint/fraud-model-endpoint'
+        'EndpointArn': 'arn:aws:sagemaker:us-east-1:123:endpoint/fraud-model-endpoint',
+        'EndpointConfigName': 'fraud-model-config'
+    }
+    mock_sagemaker.describe_endpoint_config.return_value = {
+        'ProductionVariants': [
+            {'VariantName': 'AllTraffic'}
+        ]
     }
     mock_sagemaker.list_tags.return_value = {
         'Tags': [{'Key': 'Team', 'Value': 'fraud'}]
@@ -58,7 +64,7 @@ def test_lambda_handler_with_team_tag(endpoint_event):
         assert body['team'] == 'fraud'
         assert body['alarms_created'] is True
         
-        # Should create 3 alarms
+        # Should create 3 alarms per variant (1 variant = 3 alarms)
         assert mock_cloudwatch.put_metric_alarm.call_count == 3
 
 
@@ -70,7 +76,13 @@ def test_lambda_handler_without_team_tag(endpoint_event):
     
     # Mock endpoint without team tag
     mock_sagemaker.describe_endpoint.return_value = {
-        'EndpointArn': 'arn:aws:sagemaker:us-east-1:123:endpoint/fraud-model-endpoint'
+        'EndpointArn': 'arn:aws:sagemaker:us-east-1:123:endpoint/fraud-model-endpoint',
+        'EndpointConfigName': 'fraud-model-config'
+    }
+    mock_sagemaker.describe_endpoint_config.return_value = {
+        'ProductionVariants': [
+            {'VariantName': 'AllTraffic'}
+        ]
     }
     mock_sagemaker.list_tags.return_value = {
         'Tags': []
@@ -145,38 +157,60 @@ def test_get_endpoint_team_no_tag():
 
 def test_create_endpoint_alarms():
     """Test alarm creation for endpoint."""
+    mock_sagemaker = MagicMock()
     mock_cloudwatch = MagicMock()
+    
+    # Mock variant lookup
+    mock_sagemaker.describe_endpoint.return_value = {
+        'EndpointConfigName': 'test-config'
+    }
+    mock_sagemaker.describe_endpoint_config.return_value = {
+        'ProductionVariants': [
+            {'VariantName': 'variant-1'},
+            {'VariantName': 'variant-2'}
+        ]
+    }
     
     endpoint_name = 'test-endpoint'
     team = 'fraud'
     sns_topic = 'arn:aws:sns:us-east-1:123:fraud'
     
-    with patch('endpoint_alarm.get_cloudwatch_client', return_value=mock_cloudwatch):
+    with patch('endpoint_alarm.get_sagemaker_client', return_value=mock_sagemaker), \
+         patch('endpoint_alarm.get_cloudwatch_client', return_value=mock_cloudwatch):
+        
         endpoint_alarm.create_endpoint_alarms(endpoint_name, team, sns_topic)
         
-        # Should create 3 alarms: 5XX errors, latency, invocation drop
-        assert mock_cloudwatch.put_metric_alarm.call_count == 3
+        # Should create 3 alarms per variant (2 variants × 3 = 6)
+        assert mock_cloudwatch.put_metric_alarm.call_count == 6
         
-        # Check that alarms have correct properties
+        # Check alarm properties
         calls = mock_cloudwatch.put_metric_alarm.call_args_list
         
-        # Check 5XX error alarm
-        alarm_5xx = calls[0][1]
-        assert '5xx-errors' in alarm_5xx['AlarmName']
-        assert alarm_5xx['MetricName'] == 'ModelInvocation5XXErrors'
-        assert alarm_5xx['AlarmActions'] == [sns_topic]
-        assert any(tag['Key'] == 'Team' and tag['Value'] == team for tag in alarm_5xx['Tags'])
+        # Check first alarm (5XX errors for variant-1)
+        alarm_5xx_v1 = calls[0][1]
+        assert 'variant-1' in alarm_5xx_v1['AlarmName']
+        assert '5xx-errors' in alarm_5xx_v1['AlarmName']
+        assert alarm_5xx_v1['MetricName'] == 'Invocation5XXErrors'
+        assert alarm_5xx_v1['AlarmActions'] == [sns_topic]
+        assert {'Name': 'EndpointName', 'Value': endpoint_name} in alarm_5xx_v1['Dimensions']
+        assert {'Name': 'VariantName', 'Value': 'variant-1'} in alarm_5xx_v1['Dimensions']
+        assert any(tag['Key'] == 'Team' and tag['Value'] == team for tag in alarm_5xx_v1['Tags'])
         
-        # Check latency alarm
-        alarm_latency = calls[1][1]
-        assert 'high-latency' in alarm_latency['AlarmName']
-        assert alarm_latency['MetricName'] == 'ModelLatency'
-        assert alarm_latency['ExtendedStatistic'] == 'p90'
+        # Check latency alarm (variant-1)
+        alarm_latency_v1 = calls[1][1]
+        assert 'variant-1' in alarm_latency_v1['AlarmName']
+        assert 'high-latency' in alarm_latency_v1['AlarmName']
+        assert alarm_latency_v1['MetricName'] == 'ModelLatency'
+        assert alarm_latency_v1['ExtendedStatistic'] == 'p90'
+        assert alarm_latency_v1['Threshold'] == 10000000.0  # 10 seconds in microseconds
+        assert {'Name': 'VariantName', 'Value': 'variant-1'} in alarm_latency_v1['Dimensions']
         
         # Check invocation drop alarm
-        alarm_drop = calls[2][1]
-        assert 'invocation-drop' in alarm_drop['AlarmName']
-        assert alarm_drop['MetricName'] == 'Invocations'
+        alarm_drop_v1 = calls[2][1]
+        assert 'variant-1' in alarm_drop_v1['AlarmName']
+        assert 'invocation-drop' in alarm_drop_v1['AlarmName']
+        assert alarm_drop_v1['MetricName'] == 'Invocations'
+        assert {'Name': 'VariantName', 'Value': 'variant-1'} in alarm_drop_v1['Dimensions']
 
 
 def test_alert_untagged_endpoint():

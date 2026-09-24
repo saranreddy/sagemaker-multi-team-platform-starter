@@ -99,7 +99,9 @@ if command -v jq >/dev/null 2>&1; then
     JQ_VERSION=$(jq --version 2>&1)
     echo "  ✓ jq: $JQ_VERSION"
 else
-    echo "  ⚠ jq not installed (needed for 'make smoke')"
+    echo "  ✗ jq not installed (required for 'make smoke')"
+    echo "    Install from: https://stedolan.github.io/jq/"
+    ERRORS=$((ERRORS + 1))
 fi
 
 echo ""

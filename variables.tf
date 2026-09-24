@@ -85,6 +85,17 @@ variable "deploying_principal_arn" {
   default     = ""
 }
 
+variable "studio_network_access_type" {
+  description = "Network access type for Studio: PublicInternetOnly (default, needs no NAT) or VpcOnly (requires NAT gateway)"
+  type        = string
+  default     = "PublicInternetOnly"
+
+  validation {
+    condition     = contains(["PublicInternetOnly", "VpcOnly"], var.studio_network_access_type)
+    error_message = "studio_network_access_type must be PublicInternetOnly or VpcOnly"
+  }
+}
+
 variable "platform_alert_emails" {
   description = "Email addresses for platform-level alerts (untagged resources, system issues)"
   type        = list(string)

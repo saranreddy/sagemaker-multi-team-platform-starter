@@ -50,6 +50,7 @@ resource "aws_iam_role_policy" "endpoint_alarm_lambda_permissions" {
         Effect = "Allow"
         Action = [
           "sagemaker:DescribeEndpoint",
+          "sagemaker:DescribeEndpointConfig",
           "sagemaker:ListTags"
         ]
         Resource = "*"
@@ -60,7 +61,8 @@ resource "aws_iam_role_policy" "endpoint_alarm_lambda_permissions" {
         Action = [
           "cloudwatch:PutMetricAlarm",
           "cloudwatch:DescribeAlarms",
-          "cloudwatch:DeleteAlarms"
+          "cloudwatch:DeleteAlarms",
+          "cloudwatch:TagResource"
         ]
         Resource = "*"
       },
