@@ -1,3 +1,8 @@
+output "project_name" {
+  description = "Project name prefix used for resources"
+  value       = var.project_name
+}
+
 output "studio_domain_id" {
   description = "SageMaker Studio domain ID"
   value       = aws_sagemaker_domain.main.id

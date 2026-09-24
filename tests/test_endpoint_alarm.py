@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Set up environment variables before importing the module
+os.environ['PROJECT_NAME'] = 'test-project'
 os.environ['TEAM_SNS_TOPICS'] = json.dumps({'fraud': 'arn:aws:sns:us-east-1:123:fraud', 'recsys': 'arn:aws:sns:us-east-1:123:recsys'})
 os.environ['PLATFORM_SNS_TOPIC_ARN'] = 'arn:aws:sns:us-east-1:123:platform'
 
@@ -188,6 +189,7 @@ def test_create_endpoint_alarms():
         
         # Check first alarm (5XX errors for variant-1)
         alarm_5xx_v1 = calls[0][1]
+        assert alarm_5xx_v1['AlarmName'].startswith('test-project-')
         assert 'variant-1' in alarm_5xx_v1['AlarmName']
         assert '5xx-errors' in alarm_5xx_v1['AlarmName']
         assert alarm_5xx_v1['MetricName'] == 'Invocation5XXErrors'
@@ -195,9 +197,11 @@ def test_create_endpoint_alarms():
         assert {'Name': 'EndpointName', 'Value': endpoint_name} in alarm_5xx_v1['Dimensions']
         assert {'Name': 'VariantName', 'Value': 'variant-1'} in alarm_5xx_v1['Dimensions']
         assert any(tag['Key'] == 'Team' and tag['Value'] == team for tag in alarm_5xx_v1['Tags'])
+        assert any(tag['Key'] == 'Project' and tag['Value'] == 'test-project' for tag in alarm_5xx_v1['Tags'])
         
         # Check latency alarm (variant-1)
         alarm_latency_v1 = calls[1][1]
+        assert alarm_latency_v1['AlarmName'].startswith('test-project-')
         assert 'variant-1' in alarm_latency_v1['AlarmName']
         assert 'high-latency' in alarm_latency_v1['AlarmName']
         assert alarm_latency_v1['MetricName'] == 'ModelLatency'
@@ -207,6 +211,7 @@ def test_create_endpoint_alarms():
         
         # Check invocation drop alarm
         alarm_drop_v1 = calls[2][1]
+        assert alarm_drop_v1['AlarmName'].startswith('test-project-')
         assert 'variant-1' in alarm_drop_v1['AlarmName']
         assert 'invocation-drop' in alarm_drop_v1['AlarmName']
         assert alarm_drop_v1['MetricName'] == 'Invocations'
@@ -225,3 +230,72 @@ def test_alert_untagged_endpoint():
         assert call_args[1]['TopicArn'] == 'arn:aws:sns:us-east-1:123:platform'
         assert 'Untagged' in call_args[1]['Subject']
         assert 'untagged-endpoint' in call_args[1]['Message']
+
+
+def test_lambda_handler_with_in_service_status():
+    """Test lambda handler with InService status (without underscore)."""
+    event = {
+        'detail-type': 'SageMaker Endpoint State Change',
+        'source': 'aws.sagemaker',
+        'detail': {
+            'EndpointName': 'fraud-model-endpoint',
+            'EndpointStatus': 'InService',
+            'EndpointArn': 'arn:aws:sagemaker:us-east-1:123456789:endpoint/fraud-model-endpoint'
+        }
+    }
+    
+    mock_sagemaker = MagicMock()
+    mock_cloudwatch = MagicMock()
+    mock_sns = MagicMock()
+    
+    mock_sagemaker.describe_endpoint.return_value = {
+        'EndpointArn': 'arn:aws:sagemaker:us-east-1:123:endpoint/fraud-model-endpoint',
+        'EndpointConfigName': 'fraud-model-config'
+    }
+    mock_sagemaker.describe_endpoint_config.return_value = {
+        'ProductionVariants': [
+            {'VariantName': 'AllTraffic'}
+        ]
+    }
+    mock_sagemaker.list_tags.return_value = {
+        'Tags': [{'Key': 'Team', 'Value': 'fraud'}]
+    }
+    
+    with patch('endpoint_alarm.get_sagemaker_client', return_value=mock_sagemaker), \
+         patch('endpoint_alarm.get_cloudwatch_client', return_value=mock_cloudwatch), \
+         patch('endpoint_alarm.get_sns_client', return_value=mock_sns):
+        
+        result = endpoint_alarm.lambda_handler(event, None)
+        
+        assert result['statusCode'] == 200
+        # Should create 3 alarms for 1 variant
+        assert mock_cloudwatch.put_metric_alarm.call_count == 3
+
+
+def test_lambda_handler_skips_non_inservice_status():
+    """Test lambda handler skips endpoints not in service."""
+    event = {
+        'detail-type': 'SageMaker Endpoint State Change',
+        'source': 'aws.sagemaker',
+        'detail': {
+            'EndpointName': 'fraud-model-endpoint',
+            'EndpointStatus': 'Creating',
+            'EndpointArn': 'arn:aws:sagemaker:us-east-1:123456789:endpoint/fraud-model-endpoint'
+        }
+    }
+    
+    mock_sagemaker = MagicMock()
+    mock_cloudwatch = MagicMock()
+    mock_sns = MagicMock()
+    
+    with patch('endpoint_alarm.get_sagemaker_client', return_value=mock_sagemaker), \
+         patch('endpoint_alarm.get_cloudwatch_client', return_value=mock_cloudwatch), \
+         patch('endpoint_alarm.get_sns_client', return_value=mock_sns):
+        
+        result = endpoint_alarm.lambda_handler(event, None)
+        
+        assert result['statusCode'] == 200
+        assert 'Skipped' in result['body']
+        # Should not create any alarms
+        assert mock_cloudwatch.put_metric_alarm.call_count == 0
+

@@ -4,21 +4,40 @@ data "aws_partition" "current" {}
 
 locals {
 
-  assume_role_principals = var.enable_smoke_test_assume ? [
-    {
-      type        = "Service"
-      identifiers = ["sagemaker.amazonaws.com"]
-    },
-    {
-      type        = "AWS"
-      identifiers = [var.deploying_principal_arn]
-    }
-    ] : [
-    {
-      type        = "Service"
-      identifiers = ["sagemaker.amazonaws.com"]
-    }
-  ]
+  # Build trust policy statements - separate for Service and AWS principals to avoid null Condition
+  assume_role_statements = concat(
+    [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = ["sagemaker.amazonaws.com"]
+        }
+        Action = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ],
+    var.enable_smoke_test_assume ? [
+      {
+        Effect = "Allow"
+        Principal = {
+          AWS = data.aws_caller_identity.current.account_id
+        }
+        Action = "sts:AssumeRole"
+        Condition = {
+          StringLike = {
+            "aws:PrincipalArn" = [
+              var.deploying_principal_arn,
+              "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:user/sagemaker-smoke-test-*"
+            ]
+          }
+        }
+      }
+    ] : []
+  )
 }
 
 # SNS topic for team alerts
@@ -153,21 +172,8 @@ resource "aws_iam_role" "team_execution" {
   name = "${var.project_name}-${var.team_name}-execution-role"
 
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      for principal in local.assume_role_principals : {
-        Effect = "Allow"
-        Principal = {
-          (principal.type) = principal.identifiers
-        }
-        Action = "sts:AssumeRole"
-        Condition = principal.type == "Service" ? {
-          StringEquals = {
-            "aws:RequestedRegion" = var.aws_region
-          }
-        } : null
-      }
-    ]
+    Version   = "2012-10-17"
+    Statement = local.assume_role_statements
   })
 
   tags = {
@@ -278,7 +284,7 @@ resource "aws_iam_role_policy" "team_execution_core" {
         Resource = "*"
         Condition = {
           "ForAllValues:StringEquals" = {
-            "sagemaker:InstanceTypes" = concat(["system", "ml.t3.medium"], var.allowed_instance_types)
+            "sagemaker:InstanceTypes" = distinct(concat(["system", "ml.t3.medium"], var.allowed_instance_types))
           }
           "Null" = {
             "sagemaker:InstanceTypes" = "false"
