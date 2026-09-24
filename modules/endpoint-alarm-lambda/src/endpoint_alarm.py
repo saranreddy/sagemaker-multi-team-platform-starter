@@ -34,6 +34,7 @@ def get_sns_client():
         _sns = boto3.client('sns')
     return _sns
 
+PROJECT_NAME = os.environ.get('PROJECT_NAME', 'sagemaker-platform')
 TEAM_SNS_TOPICS = json.loads(os.environ.get('TEAM_SNS_TOPICS', '{}'))
 PLATFORM_SNS_TOPIC_ARN = os.environ.get('PLATFORM_SNS_TOPIC_ARN')
 
@@ -135,7 +136,7 @@ def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
         # Alarm 1: Model invocation 5XX errors
         try:
             cloudwatch.put_metric_alarm(
-                AlarmName=f"{endpoint_name}-{variant_name}-5xx-errors",
+                AlarmName=f"{PROJECT_NAME}-{endpoint_name}-{variant_name}-5xx-errors",
                 AlarmDescription=f"Alert on 5XX errors for {endpoint_name}/{variant_name} (team={team})",
                 ActionsEnabled=True,
                 AlarmActions=[sns_topic_arn],
@@ -154,6 +155,7 @@ def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
                 Tags=[
                     {'Key': 'Team', 'Value': team},
                     {'Key': 'ManagedBy', 'Value': 'terraform'},
+                    {'Key': 'Project', 'Value': PROJECT_NAME},
                     {'Key': 'EndpointName', 'Value': endpoint_name},
                     {'Key': 'VariantName', 'Value': variant_name}
                 ]
@@ -171,7 +173,7 @@ def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
         # Alarm 2: Model latency (p90) - in microseconds
         try:
             cloudwatch.put_metric_alarm(
-                AlarmName=f"{endpoint_name}-{variant_name}-high-latency",
+                AlarmName=f"{PROJECT_NAME}-{endpoint_name}-{variant_name}-high-latency",
                 AlarmDescription=f"Alert on high latency for {endpoint_name}/{variant_name} (team={team})",
                 ActionsEnabled=True,
                 AlarmActions=[sns_topic_arn],
@@ -190,6 +192,7 @@ def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
                 Tags=[
                     {'Key': 'Team', 'Value': team},
                     {'Key': 'ManagedBy', 'Value': 'terraform'},
+                    {'Key': 'Project', 'Value': PROJECT_NAME},
                     {'Key': 'EndpointName', 'Value': endpoint_name},
                     {'Key': 'VariantName', 'Value': variant_name}
                 ]
@@ -201,7 +204,7 @@ def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
         # Alarm 3: Invocation drop (optional - detects if traffic suddenly drops)
         try:
             cloudwatch.put_metric_alarm(
-                AlarmName=f"{endpoint_name}-{variant_name}-invocation-drop",
+                AlarmName=f"{PROJECT_NAME}-{endpoint_name}-{variant_name}-invocation-drop",
                 AlarmDescription=f"Alert on invocation drop for {endpoint_name}/{variant_name} (team={team})",
                 ActionsEnabled=True,
                 AlarmActions=[sns_topic_arn],
@@ -220,6 +223,7 @@ def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
                 Tags=[
                     {'Key': 'Team', 'Value': team},
                     {'Key': 'ManagedBy', 'Value': 'terraform'},
+                    {'Key': 'Project', 'Value': PROJECT_NAME},
                     {'Key': 'EndpointName', 'Value': endpoint_name},
                     {'Key': 'VariantName', 'Value': variant_name}
                 ]

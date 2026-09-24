@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Set up environment variables before importing the module
+os.environ['PROJECT_NAME'] = 'test-project'
 os.environ['TEAM_SNS_TOPICS'] = json.dumps({'fraud': 'arn:aws:sns:us-east-1:123:fraud', 'recsys': 'arn:aws:sns:us-east-1:123:recsys'})
 os.environ['PLATFORM_SNS_TOPIC_ARN'] = 'arn:aws:sns:us-east-1:123:platform'
 
@@ -188,6 +189,7 @@ def test_create_endpoint_alarms():
         
         # Check first alarm (5XX errors for variant-1)
         alarm_5xx_v1 = calls[0][1]
+        assert alarm_5xx_v1['AlarmName'].startswith('test-project-')
         assert 'variant-1' in alarm_5xx_v1['AlarmName']
         assert '5xx-errors' in alarm_5xx_v1['AlarmName']
         assert alarm_5xx_v1['MetricName'] == 'Invocation5XXErrors'
@@ -195,9 +197,11 @@ def test_create_endpoint_alarms():
         assert {'Name': 'EndpointName', 'Value': endpoint_name} in alarm_5xx_v1['Dimensions']
         assert {'Name': 'VariantName', 'Value': 'variant-1'} in alarm_5xx_v1['Dimensions']
         assert any(tag['Key'] == 'Team' and tag['Value'] == team for tag in alarm_5xx_v1['Tags'])
+        assert any(tag['Key'] == 'Project' and tag['Value'] == 'test-project' for tag in alarm_5xx_v1['Tags'])
         
         # Check latency alarm (variant-1)
         alarm_latency_v1 = calls[1][1]
+        assert alarm_latency_v1['AlarmName'].startswith('test-project-')
         assert 'variant-1' in alarm_latency_v1['AlarmName']
         assert 'high-latency' in alarm_latency_v1['AlarmName']
         assert alarm_latency_v1['MetricName'] == 'ModelLatency'
@@ -207,6 +211,7 @@ def test_create_endpoint_alarms():
         
         # Check invocation drop alarm
         alarm_drop_v1 = calls[2][1]
+        assert alarm_drop_v1['AlarmName'].startswith('test-project-')
         assert 'variant-1' in alarm_drop_v1['AlarmName']
         assert 'invocation-drop' in alarm_drop_v1['AlarmName']
         assert alarm_drop_v1['MetricName'] == 'Invocations'

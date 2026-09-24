@@ -81,6 +81,9 @@ jobs:
       - name: Run pytest
         run: |
           pytest tests/ -v
+      
+      - name: Test smoke test policy generation
+        run: bash tests/test_smoke_policy.sh
 
   plan:
     name: Terraform Plan

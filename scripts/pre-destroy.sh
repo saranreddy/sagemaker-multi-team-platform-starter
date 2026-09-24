@@ -35,26 +35,54 @@ echo "Found SageMaker domain: $DOMAIN_ID"
 
 # Delete CloudWatch alarms created by endpoint alarm Lambda
 echo "Deleting CloudWatch alarms..."
-PROJECT_NAME=$(terraform output -raw project_name 2>/dev/null || echo "sagemaker-platform")
-ALARM_PREFIX="${PROJECT_NAME}-endpoint-"
+PROJECT_NAME=$(terraform output -raw project_name 2>/dev/null)
 
-# List and delete all alarms with our prefix
-ALARM_NAMES=$("$AWS_CMD" cloudwatch describe-alarms \
-    --region "$REGION" \
-    --output json 2>/dev/null | jq -r ".MetricAlarms[] | select(.AlarmName | startswith(\"$ALARM_PREFIX\")) | .AlarmName")
-
-if [ -n "$ALARM_NAMES" ]; then
-    echo "Found $(echo "$ALARM_NAMES" | wc -w | tr -d ' ') alarms to delete"
-    echo "$ALARM_NAMES" | while read -r alarm_name; do
-        if [ -n "$alarm_name" ]; then
-            echo "  Deleting alarm: $alarm_name"
-            "$AWS_CMD" cloudwatch delete-alarms \
+if [ -z "$PROJECT_NAME" ]; then
+    echo "Warning: Could not get project_name from Terraform output, skipping alarm cleanup"
+else
+    ALARM_PREFIX="${PROJECT_NAME}-"
+    
+    # Paginated describe-alarms with --alarm-name-prefix
+    echo "Looking for alarms with prefix: $ALARM_PREFIX"
+    NEXT_TOKEN=""
+    ALARM_COUNT=0
+    
+    while true; do
+        if [ -n "$NEXT_TOKEN" ]; then
+            RESPONSE=$("$AWS_CMD" cloudwatch describe-alarms \
                 --region "$REGION" \
-                --alarm-names "$alarm_name" 2>/dev/null || true
+                --alarm-name-prefix "$ALARM_PREFIX" \
+                --starting-token "$NEXT_TOKEN" \
+                --output json 2>/dev/null || echo '{"MetricAlarms":[],"NextToken":null}')
+        else
+            RESPONSE=$("$AWS_CMD" cloudwatch describe-alarms \
+                --region "$REGION" \
+                --alarm-name-prefix "$ALARM_PREFIX" \
+                --output json 2>/dev/null || echo '{"MetricAlarms":[],"NextToken":null}')
+        fi
+        
+        ALARM_NAMES=$(echo "$RESPONSE" | jq -r '.MetricAlarms[] | .AlarmName')
+        
+        if [ -n "$ALARM_NAMES" ]; then
+            echo "$ALARM_NAMES" | while read -r alarm_name; do
+                if [ -n "$alarm_name" ]; then
+                    echo "  Deleting alarm: $alarm_name"
+                    "$AWS_CMD" cloudwatch delete-alarms \
+                        --region "$REGION" \
+                        --alarm-names "$alarm_name" 2>/dev/null || true
+                    ALARM_COUNT=$((ALARM_COUNT + 1))
+                fi
+            done
+        fi
+        
+        NEXT_TOKEN=$(echo "$RESPONSE" | jq -r '.NextToken // empty')
+        
+        if [ -z "$NEXT_TOKEN" ] || [ "$NEXT_TOKEN" = "null" ]; then
+            break
         fi
     done
-else
-    echo "No alarms found with prefix: $ALARM_PREFIX"
+    
+    echo "Deleted $ALARM_COUNT alarms"
 fi
 
 # Delete all apps in the domain

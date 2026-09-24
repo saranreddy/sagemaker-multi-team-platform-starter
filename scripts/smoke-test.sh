@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -o pipefail
 
 # Smoke test - validates infrastructure is working and isolation is enforced
 
@@ -22,21 +23,38 @@ cleanup_temp_user() {
         
         # Delete access key if created
         if [ -n "$TEMP_ACCESS_KEY_ID" ]; then
-            "$AWS_CMD" iam delete-access-key \
+            if "$AWS_CMD" iam delete-access-key \
                 --user-name "$TEMP_USER_NAME" \
-                --access-key-id "$TEMP_ACCESS_KEY_ID" 2>/dev/null || true
+                --access-key-id "$TEMP_ACCESS_KEY_ID" 2>/dev/null; then
+                echo "  ✓ Deleted access key"
+            else
+                echo "  ⚠ Failed to delete access key (may not exist)"
+            fi
         fi
         
         # Delete inline policy
-        "$AWS_CMD" iam delete-user-policy \
+        if "$AWS_CMD" iam delete-user-policy \
             --user-name "$TEMP_USER_NAME" \
-            --policy-name smoke-test-assume-role 2>/dev/null || true
+            --policy-name smoke-test-assume-role 2>/dev/null; then
+            echo "  ✓ Deleted inline policy"
+        else
+            echo "  ⚠ Failed to delete inline policy (may not exist)"
+        fi
         
         # Delete user
-        "$AWS_CMD" iam delete-user \
-            --user-name "$TEMP_USER_NAME" 2>/dev/null || true
-        
-        echo "  ✓ Temporary user cleaned up"
+        if "$AWS_CMD" iam delete-user \
+            --user-name "$TEMP_USER_NAME" 2>/dev/null; then
+            echo "  ✓ Deleted temporary user"
+        else
+            echo ""
+            echo "═══════════════════════════════════════════════════════════"
+            echo "⚠️  WARNING: Failed to delete temporary IAM user!"
+            echo "   User name: $TEMP_USER_NAME"
+            echo "   Please delete this user manually from the AWS Console"
+            echo "   or with: aws iam delete-user --user-name $TEMP_USER_NAME"
+            echo "═══════════════════════════════════════════════════════════"
+            echo ""
+        fi
     fi
 }
 
@@ -167,22 +185,25 @@ elif [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
         "$AWS_CMD" iam create-user --user-name "$TEMP_USER_NAME" >/dev/null
         TEMP_USER_CREATED=true
         
-        # Attach inline policy allowing AssumeRole for team roles
-        POLICY_DOC=$(cat <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "sts:AssumeRole",
-      "Resource": [
-        "$(echo "$TEAM_DETAILS" | jq -r '.[] | .execution_role_arn' | tr '\n' ',' | sed 's/,$//' | awk -F, '{for(i=1;i<=NF;i++){printf "\"%s\"",$i;if(i<NF)printf ","}}' | sed 's/""/","/g')"
-      ]
-    }
-  ]
-}
-EOF
-)
+        # Build inline policy allowing AssumeRole for team roles using jq
+        echo "    Building IAM policy..."
+        POLICY_DOC=$(echo "$TEAM_DETAILS" | jq -c '{
+            Version: "2012-10-17",
+            Statement: [{
+                Effect: "Allow",
+                Action: "sts:AssumeRole",
+                Resource: [.[] | .execution_role_arn]
+            }]
+        }')
+        
+        # Validate policy JSON
+        if ! echo "$POLICY_DOC" | jq empty 2>/dev/null; then
+            echo "    ✗ FAILED: Generated invalid policy JSON"
+            echo "    Policy: $POLICY_DOC"
+            exit 1
+        fi
+        
+        echo "    Attaching inline policy..."
         "$AWS_CMD" iam put-user-policy \
             --user-name "$TEMP_USER_NAME" \
             --policy-name smoke-test-assume-role \
@@ -194,56 +215,93 @@ EOF
         TEMP_ACCESS_KEY_ID=$(echo "$KEY_OUTPUT" | jq -r '.AccessKey.AccessKeyId')
         TEMP_SECRET_ACCESS_KEY=$(echo "$KEY_OUTPUT" | jq -r '.AccessKey.SecretAccessKey')
         
-        # Wait for IAM propagation
-        echo "    Waiting for IAM propagation (10 seconds)..."
-        sleep 10
+        # Retry assume-role until IAM propagates (up to 60 seconds)
+        echo "    Waiting for IAM propagation (retry for up to 60 seconds)..."
+        RETRY_COUNT=0
+        MAX_RETRIES=12
+        ASSUME_SUCCESS=false
         
-        # Use temporary credentials for assume-role
-        ORIGINAL_ACCESS_KEY="$AWS_ACCESS_KEY_ID"
-        ORIGINAL_SECRET_KEY="$AWS_SECRET_ACCESS_KEY"
-        ORIGINAL_SESSION_TOKEN="$AWS_SESSION_TOKEN"
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if OUT=$(env AWS_ACCESS_KEY_ID="$TEMP_ACCESS_KEY_ID" \
+                     AWS_SECRET_ACCESS_KEY="$TEMP_SECRET_ACCESS_KEY" \
+                     "$AWS_CMD" sts assume-role \
+                         --role-arn "$ROLE_A" \
+                         --role-session-name smoke-test-propagation-check \
+                         --output json 2>&1); then
+                ASSUME_SUCCESS=true
+                echo "    ✓ IAM propagation complete (took $((RETRY_COUNT * 5)) seconds)"
+                break
+            fi
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "      Retry $RETRY_COUNT/$MAX_RETRIES..."
+                sleep 5
+            fi
+        done
         
-        export AWS_ACCESS_KEY_ID="$TEMP_ACCESS_KEY_ID"
-        export AWS_SECRET_ACCESS_KEY="$TEMP_SECRET_ACCESS_KEY"
-        unset AWS_SESSION_TOKEN
+        if [ "$ASSUME_SUCCESS" = false ]; then
+            echo "    ✗ FAILED: IAM propagation timeout after 60 seconds"
+            echo "    Last error: $OUT"
+            ERRORS=$((ERRORS + 1))
+            # Don't continue with tests if propagation failed
+            echo ""
+            exit 1
+        fi
     fi
     
     # Attempt to assume team A role with explicit error handling
-    ASSUME_OUTPUT=$("$AWS_CMD" sts assume-role \
-        --role-arn "$ROLE_A" \
-        --role-session-name smoke-test \
-        --output json 2>&1)
-    ASSUME_RC=$?
+    # Use per-command env to avoid mutating caller's credentials
+    if [[ "$CALLER_ARN" == *":root" ]]; then
+        # Use temp user credentials
+        if OUT=$(env AWS_ACCESS_KEY_ID="$TEMP_ACCESS_KEY_ID" \
+                 AWS_SECRET_ACCESS_KEY="$TEMP_SECRET_ACCESS_KEY" \
+                 "$AWS_CMD" sts assume-role \
+                     --role-arn "$ROLE_A" \
+                     --role-session-name smoke-test \
+                     --output json 2>&1); then
+            ASSUME_OUTPUT="$OUT"
+            ASSUME_RC=0
+        else
+            ASSUME_OUTPUT="$OUT"
+            ASSUME_RC=$?
+        fi
+    else
+        # Use caller's credentials directly
+        if OUT=$("$AWS_CMD" sts assume-role \
+                 --role-arn "$ROLE_A" \
+                 --role-session-name smoke-test \
+                 --output json 2>&1); then
+            ASSUME_OUTPUT="$OUT"
+            ASSUME_RC=0
+        else
+            ASSUME_OUTPUT="$OUT"
+            ASSUME_RC=$?
+        fi
+    fi
     
     if [ $ASSUME_RC -ne 0 ]; then
         echo "    ✗ FAILED: Cannot assume role $ROLE_A"
         echo "    Error: $ASSUME_OUTPUT"
         echo "    This is a critical failure when enable_smoke_test_assume=true"
         ERRORS=$((ERRORS + 1))
-        
-        # Restore original credentials if we switched to temp user
-        if [[ "$CALLER_ARN" == *":root" ]]; then
-            export AWS_ACCESS_KEY_ID="$ORIGINAL_ACCESS_KEY"
-            export AWS_SECRET_ACCESS_KEY="$ORIGINAL_SECRET_KEY"
-            [ -n "$ORIGINAL_SESSION_TOKEN" ] && export AWS_SESSION_TOKEN="$ORIGINAL_SESSION_TOKEN" || unset AWS_SESSION_TOKEN
-        fi
     elif echo "$ASSUME_OUTPUT" | jq -e '.Credentials.AccessKeyId' >/dev/null 2>&1; then
         # Successfully assumed role
         ROLE_ACCESS_KEY=$(echo "$ASSUME_OUTPUT" | jq -r '.Credentials.AccessKeyId')
         ROLE_SECRET_KEY=$(echo "$ASSUME_OUTPUT" | jq -r '.Credentials.SecretAccessKey')
         ROLE_SESSION_TOKEN=$(echo "$ASSUME_OUTPUT" | jq -r '.Credentials.SessionToken')
         
-        # Switch to role credentials
-        export AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY"
-        export AWS_SECRET_ACCESS_KEY="$ROLE_SECRET_KEY"
-        export AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN"
-        
-        # Test write to own bucket
-        if echo "test" | "$AWS_CMD" s3 cp - "s3://$BUCKET_A/$TEST_FILE" --region "$REGION" >/dev/null 2>&1; then
+        # Test write to own bucket using per-command env
+        if echo "test" | env AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY" \
+                             AWS_SECRET_ACCESS_KEY="$ROLE_SECRET_KEY" \
+                             AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN" \
+                             "$AWS_CMD" s3 cp - "s3://$BUCKET_A/$TEST_FILE" --region "$REGION" >/dev/null 2>&1; then
             echo "    ✓ Team A can write to its own bucket"
             
             # Test read from own bucket
-            if "$AWS_CMD" s3 cp "s3://$BUCKET_A/$TEST_FILE" - --region "$REGION" >/dev/null 2>&1; then
+            if env AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY" \
+                   AWS_SECRET_ACCESS_KEY="$ROLE_SECRET_KEY" \
+                   AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN" \
+                   "$AWS_CMD" s3 cp "s3://$BUCKET_A/$TEST_FILE" - --region "$REGION" >/dev/null 2>&1; then
                 echo "    ✓ Team A can read from its own bucket"
             else
                 echo "    ✗ Team A cannot read from its own bucket"
@@ -251,31 +309,29 @@ EOF
             fi
             
             # Clean up
-            "$AWS_CMD" s3 rm "s3://$BUCKET_A/$TEST_FILE" --region "$REGION" >/dev/null 2>&1 || true
+            env AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY" \
+                AWS_SECRET_ACCESS_KEY="$ROLE_SECRET_KEY" \
+                AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN" \
+                "$AWS_CMD" s3 rm "s3://$BUCKET_A/$TEST_FILE" --region "$REGION" >/dev/null 2>&1 || true
         else
             echo "    ✗ Team A cannot write to its own bucket"
             ERRORS=$((ERRORS + 1))
         fi
         
         # Test access to team B bucket (should be denied) - CRITICAL TEST
-        if echo "test" | "$AWS_CMD" s3 cp - "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" >/dev/null 2>&1; then
+        if echo "test" | env AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY" \
+                             AWS_SECRET_ACCESS_KEY="$ROLE_SECRET_KEY" \
+                             AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN" \
+                             "$AWS_CMD" s3 cp - "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" >/dev/null 2>&1; then
             echo "    ✗ ISOLATION BREACH: Team A can write to Team B bucket!"
             ERRORS=$((ERRORS + 1))
             # Clean up if somehow succeeded
-            "$AWS_CMD" s3 rm "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" >/dev/null 2>&1 || true
+            env AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY" \
+                AWS_SECRET_ACCESS_KEY="$ROLE_SECRET_KEY" \
+                AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN" \
+                "$AWS_CMD" s3 rm "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" >/dev/null 2>&1 || true
         else
             echo "    ✓ Team A cannot access Team B bucket (isolation working)"
-        fi
-        
-        # Restore credentials
-        if [[ "$CALLER_ARN" == *":root" ]]; then
-            # Restore to temp user credentials (will be cleaned up by trap)
-            export AWS_ACCESS_KEY_ID="$ORIGINAL_ACCESS_KEY"
-            export AWS_SECRET_ACCESS_KEY="$ORIGINAL_SECRET_KEY"
-            [ -n "$ORIGINAL_SESSION_TOKEN" ] && export AWS_SESSION_TOKEN="$ORIGINAL_SESSION_TOKEN" || unset AWS_SESSION_TOKEN
-        else
-            # Restore to original credentials
-            unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
         fi
     else
         echo "    ✗ FAILED: Unexpected assume-role response format"

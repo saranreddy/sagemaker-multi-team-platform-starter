@@ -104,6 +104,7 @@ resource "aws_lambda_function" "endpoint_alarm" {
 
   environment {
     variables = {
+      PROJECT_NAME           = var.project_name
       TEAM_SNS_TOPICS        = jsonencode(var.team_sns_topics)
       PLATFORM_SNS_TOPIC_ARN = var.platform_sns_topic_arn
     }

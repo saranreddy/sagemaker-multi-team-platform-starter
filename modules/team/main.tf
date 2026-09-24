@@ -15,7 +15,7 @@ locals {
         Action = "sts:AssumeRole"
         Condition = {
           StringEquals = {
-            "aws:RequestedRegion" = var.aws_region
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
           }
         }
       }

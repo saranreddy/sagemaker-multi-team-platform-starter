@@ -20,7 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Instance type restrictions per team via SageMaker condition keys
 - Cost guardrails:
   - AWS Budgets per team with cost allocation tag filtering
-  - Studio idle auto-shutdown via lifecycle configuration
   - Scheduled reaper Lambda (Python 3.11) for idle resource cleanup
   - Report-only and deletion modes for reaper
 - Default monitoring:
