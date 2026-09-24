@@ -319,11 +319,13 @@ elif [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
         fi
         
         # Test access to team B bucket (should be denied) - CRITICAL TEST
-        if echo "test" | env AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY" \
-                             AWS_SECRET_ACCESS_KEY="$ROLE_SECRET_KEY" \
-                             AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN" \
-                             "$AWS_CMD" s3 cp - "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" >/dev/null 2>&1; then
+        echo "  Testing isolation: Team A attempting to write to Team B bucket..."
+        if ISOLATION_TEST_OUTPUT=$(echo "test" | env AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY" \
+                                               AWS_SECRET_ACCESS_KEY="$ROLE_SECRET_KEY" \
+                                               AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN" \
+                                               "$AWS_CMD" s3 cp - "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" 2>&1); then
             echo "    ✗ ISOLATION BREACH: Team A can write to Team B bucket!"
+            echo "    Unexpected success output: $ISOLATION_TEST_OUTPUT"
             ERRORS=$((ERRORS + 1))
             # Clean up if somehow succeeded
             env AWS_ACCESS_KEY_ID="$ROLE_ACCESS_KEY" \
@@ -331,7 +333,16 @@ elif [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
                 AWS_SESSION_TOKEN="$ROLE_SESSION_TOKEN" \
                 "$AWS_CMD" s3 rm "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" >/dev/null 2>&1 || true
         else
-            echo "    ✓ Team A cannot access Team B bucket (isolation working)"
+            # Check that it failed with AccessDenied (not a network error)
+            if echo "$ISOLATION_TEST_OUTPUT" | grep -q "AccessDenied"; then
+                ACCESS_DENIED_LINE=$(echo "$ISOLATION_TEST_OUTPUT" | grep "AccessDenied" | head -1)
+                echo "    ✓ Team A cannot access Team B bucket (isolation working)"
+                echo "      Proof: $ACCESS_DENIED_LINE"
+            else
+                echo "    ✗ FAILED: S3 access failed but not with AccessDenied (network/other error?)"
+                echo "    Error output: $ISOLATION_TEST_OUTPUT"
+                ERRORS=$((ERRORS + 1))
+            fi
         fi
     else
         echo "    ✗ FAILED: Unexpected assume-role response format"
