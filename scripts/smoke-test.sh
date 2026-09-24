@@ -263,7 +263,7 @@ elif [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
             ASSUME_RC=0
         else
             ASSUME_OUTPUT="$OUT"
-            ASSUME_RC=$?
+            ASSUME_RC=1
         fi
     else
         # Use caller's credentials directly
@@ -275,7 +275,7 @@ elif [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
             ASSUME_RC=0
         else
             ASSUME_OUTPUT="$OUT"
-            ASSUME_RC=$?
+            ASSUME_RC=1
         fi
     fi
     

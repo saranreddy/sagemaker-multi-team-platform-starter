@@ -24,7 +24,7 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # Get domain ID from Terraform state
-DOMAIN_ID=$(terraform output -raw studio_domain_id 2>/dev/null || echo "")
+DOMAIN_ID=$(terraform output -raw studio_domain_id 2>/dev/null) || DOMAIN_ID=""
 
 if [ -z "$DOMAIN_ID" ] || [ "$DOMAIN_ID" = "" ]; then
     echo "No SageMaker domain found in state, skipping cleanup"
@@ -35,7 +35,7 @@ echo "Found SageMaker domain: $DOMAIN_ID"
 
 # Delete CloudWatch alarms created by endpoint alarm Lambda
 echo "Deleting CloudWatch alarms..."
-PROJECT_NAME=$(terraform output -raw project_name 2>/dev/null)
+PROJECT_NAME=$(terraform output -raw project_name 2>/dev/null) || PROJECT_NAME=""
 
 if [ -z "$PROJECT_NAME" ]; then
     echo "Warning: Could not get project_name from Terraform output, skipping alarm cleanup"
@@ -46,6 +46,7 @@ else
     echo "Looking for alarms with prefix: $ALARM_PREFIX"
     NEXT_TOKEN=""
     ALARM_COUNT=0
+    ALL_ALARM_NAMES=""
     
     while true; do
         if [ -n "$NEXT_TOKEN" ]; then
@@ -64,15 +65,7 @@ else
         ALARM_NAMES=$(echo "$RESPONSE" | jq -r '.MetricAlarms[] | .AlarmName')
         
         if [ -n "$ALARM_NAMES" ]; then
-            echo "$ALARM_NAMES" | while read -r alarm_name; do
-                if [ -n "$alarm_name" ]; then
-                    echo "  Deleting alarm: $alarm_name"
-                    "$AWS_CMD" cloudwatch delete-alarms \
-                        --region "$REGION" \
-                        --alarm-names "$alarm_name" 2>/dev/null || true
-                    ALARM_COUNT=$((ALARM_COUNT + 1))
-                fi
-            done
+            ALL_ALARM_NAMES="${ALL_ALARM_NAMES}${ALARM_NAMES}"$'\n'
         fi
         
         NEXT_TOKEN=$(echo "$RESPONSE" | jq -r '.NextToken // empty')
@@ -81,6 +74,19 @@ else
             break
         fi
     done
+    
+    # Delete alarms using here-string to avoid subshell
+    if [ -n "$ALL_ALARM_NAMES" ]; then
+        while IFS= read -r alarm_name; do
+            if [ -n "$alarm_name" ]; then
+                echo "  Deleting alarm: $alarm_name"
+                "$AWS_CMD" cloudwatch delete-alarms \
+                    --region "$REGION" \
+                    --alarm-names "$alarm_name" 2>/dev/null || true
+                ALARM_COUNT=$((ALARM_COUNT + 1))
+            fi
+        done <<< "$ALL_ALARM_NAMES"
+    fi
     
     echo "Deleted $ALARM_COUNT alarms"
 fi
@@ -118,7 +124,7 @@ sleep 10
 MAX_WAIT=300  # 5 minutes
 WAITED=0
 while [ $WAITED -lt $MAX_WAIT ]; do
-    REMAINING=$("$AWS_CMD" sagemaker list-apps --region "$REGION" --output json 2>/dev/null | jq -r "[.Apps[] | select(.DomainId == \"$DOMAIN_ID\")] | length")
+    REMAINING=$("$AWS_CMD" sagemaker list-apps --region "$REGION" --output json 2>/dev/null | jq -r "[.Apps[] | select(.DomainId == \"$DOMAIN_ID\")] | length" 2>/dev/null) || REMAINING="0"
     
     if [ "$REMAINING" = "0" ]; then
         echo "All apps deleted successfully"
@@ -152,7 +158,7 @@ if [ -n "$(echo "$SPACES" | jq -r '.Spaces[] | .SpaceName')" ]; then
     MAX_WAIT=300
     WAITED=0
     while [ $WAITED -lt $MAX_WAIT ]; do
-        REMAINING=$("$AWS_CMD" sagemaker list-spaces --domain-id "$DOMAIN_ID" --region "$REGION" --output json 2>/dev/null | jq -r '.Spaces | length')
+        REMAINING=$("$AWS_CMD" sagemaker list-spaces --domain-id "$DOMAIN_ID" --region "$REGION" --output json 2>/dev/null | jq -r '.Spaces | length' 2>/dev/null) || REMAINING="0"
         
         if [ "$REMAINING" = "0" ]; then
             echo "All spaces deleted successfully"
