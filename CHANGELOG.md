@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Example tfvars with two demo teams
   - Known limitations and when-not-to-use guidance
 
+### Fixed (Live Test)
+- Fixed Terraform version parsing in `doctor.sh` for TF 1.5.7 (uses `jq -r .terraform_version` with fallback)
+- Fixed IAM trust policy rendering to omit `Condition` key when null (avoided `MalformedPolicyDocument` error)
+- Added root account caller support for smoke tests (automatically creates temporary IAM user for assume-role tests)
+- Fixed smoke test error handling for assume-role failures (explicit capture and error messages)
+- Fixed EventBridge pattern to support both `InService` and `IN_SERVICE` endpoint statuses
+- Fixed Lambda status normalization to handle both formats case-insensitively
+- Removed duplicate `ml.t3.medium` in `SageMakerCreateApp` instance types list using `distinct()`
+- Added managed CloudWatch log groups for Lambda functions with 14-day retention
+- Added alarm cleanup to `pre-destroy.sh` script (deletes alarms created by endpoint alarm Lambda)
+- Fixed `make clean` to preserve `terraform.tfstate*` files (prevents orphaned live infrastructure)
+
 ### Technical Details
 - Terraform >= 1.5.7, AWS provider ~> 5.0
 - Default VPC detection with override support

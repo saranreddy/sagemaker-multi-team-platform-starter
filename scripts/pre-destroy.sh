@@ -33,6 +33,30 @@ fi
 
 echo "Found SageMaker domain: $DOMAIN_ID"
 
+# Delete CloudWatch alarms created by endpoint alarm Lambda
+echo "Deleting CloudWatch alarms..."
+PROJECT_NAME=$(terraform output -raw project_name 2>/dev/null || echo "sagemaker-platform")
+ALARM_PREFIX="${PROJECT_NAME}-endpoint-"
+
+# List and delete all alarms with our prefix
+ALARM_NAMES=$("$AWS_CMD" cloudwatch describe-alarms \
+    --region "$REGION" \
+    --output json 2>/dev/null | jq -r ".MetricAlarms[] | select(.AlarmName | startswith(\"$ALARM_PREFIX\")) | .AlarmName")
+
+if [ -n "$ALARM_NAMES" ]; then
+    echo "Found $(echo "$ALARM_NAMES" | wc -w | tr -d ' ') alarms to delete"
+    echo "$ALARM_NAMES" | while read -r alarm_name; do
+        if [ -n "$alarm_name" ]; then
+            echo "  Deleting alarm: $alarm_name"
+            "$AWS_CMD" cloudwatch delete-alarms \
+                --region "$REGION" \
+                --alarm-names "$alarm_name" 2>/dev/null || true
+        fi
+    done
+else
+    echo "No alarms found with prefix: $ALARM_PREFIX"
+fi
+
 # Delete all apps in the domain
 echo "Deleting Studio apps..."
 APPS=$("$AWS_CMD" sagemaker list-apps --region "$REGION" --output json 2>/dev/null || echo '{"Apps":[]}')

@@ -225,3 +225,72 @@ def test_alert_untagged_endpoint():
         assert call_args[1]['TopicArn'] == 'arn:aws:sns:us-east-1:123:platform'
         assert 'Untagged' in call_args[1]['Subject']
         assert 'untagged-endpoint' in call_args[1]['Message']
+
+
+def test_lambda_handler_with_in_service_status():
+    """Test lambda handler with InService status (without underscore)."""
+    event = {
+        'detail-type': 'SageMaker Endpoint State Change',
+        'source': 'aws.sagemaker',
+        'detail': {
+            'EndpointName': 'fraud-model-endpoint',
+            'EndpointStatus': 'InService',
+            'EndpointArn': 'arn:aws:sagemaker:us-east-1:123456789:endpoint/fraud-model-endpoint'
+        }
+    }
+    
+    mock_sagemaker = MagicMock()
+    mock_cloudwatch = MagicMock()
+    mock_sns = MagicMock()
+    
+    mock_sagemaker.describe_endpoint.return_value = {
+        'EndpointArn': 'arn:aws:sagemaker:us-east-1:123:endpoint/fraud-model-endpoint',
+        'EndpointConfigName': 'fraud-model-config'
+    }
+    mock_sagemaker.describe_endpoint_config.return_value = {
+        'ProductionVariants': [
+            {'VariantName': 'AllTraffic'}
+        ]
+    }
+    mock_sagemaker.list_tags.return_value = {
+        'Tags': [{'Key': 'Team', 'Value': 'fraud'}]
+    }
+    
+    with patch('endpoint_alarm.get_sagemaker_client', return_value=mock_sagemaker), \
+         patch('endpoint_alarm.get_cloudwatch_client', return_value=mock_cloudwatch), \
+         patch('endpoint_alarm.get_sns_client', return_value=mock_sns):
+        
+        result = endpoint_alarm.lambda_handler(event, None)
+        
+        assert result['statusCode'] == 200
+        # Should create 3 alarms for 1 variant
+        assert mock_cloudwatch.put_metric_alarm.call_count == 3
+
+
+def test_lambda_handler_skips_non_inservice_status():
+    """Test lambda handler skips endpoints not in service."""
+    event = {
+        'detail-type': 'SageMaker Endpoint State Change',
+        'source': 'aws.sagemaker',
+        'detail': {
+            'EndpointName': 'fraud-model-endpoint',
+            'EndpointStatus': 'Creating',
+            'EndpointArn': 'arn:aws:sagemaker:us-east-1:123456789:endpoint/fraud-model-endpoint'
+        }
+    }
+    
+    mock_sagemaker = MagicMock()
+    mock_cloudwatch = MagicMock()
+    mock_sns = MagicMock()
+    
+    with patch('endpoint_alarm.get_sagemaker_client', return_value=mock_sagemaker), \
+         patch('endpoint_alarm.get_cloudwatch_client', return_value=mock_cloudwatch), \
+         patch('endpoint_alarm.get_sns_client', return_value=mock_sns):
+        
+        result = endpoint_alarm.lambda_handler(event, None)
+        
+        assert result['statusCode'] == 200
+        assert 'Skipped' in result['body']
+        # Should not create any alarms
+        assert mock_cloudwatch.put_metric_alarm.call_count == 0
+

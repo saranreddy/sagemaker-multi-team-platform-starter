@@ -4,6 +4,16 @@ data "aws_partition" "current" {}
 
 data "aws_region" "current" {}
 
+# CloudWatch log group for Lambda
+resource "aws_cloudwatch_log_group" "reaper_lambda" {
+  name              = "/aws/lambda/${var.project_name}-idle-resource-reaper"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${var.project_name}-reaper-logs"
+  }
+}
+
 # Package Lambda function
 data "archive_file" "reaper_lambda" {
   type        = "zip"
@@ -114,6 +124,8 @@ resource "aws_lambda_function" "reaper" {
       PLATFORM_SNS_TOPIC_ARN = var.platform_sns_topic_arn
     }
   }
+
+  depends_on = [aws_cloudwatch_log_group.reaper_lambda]
 
   tags = {
     Name = "${var.project_name}-reaper"

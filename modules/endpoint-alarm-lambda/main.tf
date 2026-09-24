@@ -4,6 +4,16 @@ data "aws_partition" "current" {}
 
 data "aws_region" "current" {}
 
+# CloudWatch log group for Lambda
+resource "aws_cloudwatch_log_group" "endpoint_alarm_lambda" {
+  name              = "/aws/lambda/${var.project_name}-endpoint-alarm-attacher"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${var.project_name}-endpoint-alarm-logs"
+  }
+}
+
 # Package Lambda function
 data "archive_file" "endpoint_alarm_lambda" {
   type        = "zip"
@@ -99,6 +109,8 @@ resource "aws_lambda_function" "endpoint_alarm" {
     }
   }
 
+  depends_on = [aws_cloudwatch_log_group.endpoint_alarm_lambda]
+
   tags = {
     Name = "${var.project_name}-endpoint-alarm"
   }
@@ -113,7 +125,7 @@ resource "aws_cloudwatch_event_rule" "endpoint_state_change" {
     source      = ["aws.sagemaker"]
     detail-type = ["SageMaker Endpoint State Change"]
     detail = {
-      EndpointStatus = ["IN_SERVICE"]
+      EndpointStatus = ["InService", "IN_SERVICE"]
     }
   })
 

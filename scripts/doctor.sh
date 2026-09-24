@@ -11,7 +11,8 @@ ERRORS=0
 # Check Terraform
 echo "Checking Terraform..."
 if command -v terraform >/dev/null 2>&1; then
-    TERRAFORM_VERSION=$(terraform version -json | grep -o '"terraform_version":"[^"]*' | cut -d'"' -f4)
+    # Use jq to parse version reliably (handles pretty-printed JSON)
+    TERRAFORM_VERSION=$(terraform version -json 2>/dev/null | jq -r '.terraform_version' 2>/dev/null || terraform version | grep -o 'v[0-9][^ ]*' | head -1 | sed 's/^v//')
     echo "  ✓ Terraform installed: $TERRAFORM_VERSION"
     
     # Check minimum version

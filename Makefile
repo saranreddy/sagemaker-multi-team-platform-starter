@@ -63,7 +63,6 @@ destroy: ## Destroy all Terraform resources
 
 clean: ## Clean temporary files
 	rm -rf .terraform
-	rm -f terraform.tfstate*
 	rm -rf modules/reaper-lambda/lambda_package.zip
 	rm -rf modules/endpoint-alarm-lambda/lambda_package.zip
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

@@ -322,7 +322,7 @@ make smoke
 - ✓ Reaper Lambda invokes successfully
 - ✓ Alarm Lambda exists and is wired to EventBridge
 
-**Note:** Isolation test requires `enable_smoke_test_assume = true` (default).
+**Note:** Isolation test requires `enable_smoke_test_assume = true` (default). **For root account callers**, the smoke test automatically creates a temporary IAM user with minimal permissions to perform the assume-role tests, then cleans up the user afterward. For production deployments, it's recommended to use a non-root IAM user or role for deployment and testing.
 
 ### Enabling the Reaper (Deletion Mode)
 
@@ -395,7 +395,7 @@ make destroy
 ```
 
 **What happens:**
-1. `scripts/pre-destroy.sh` runs: deletes all Studio apps and spaces (they block domain deletion)
+1. `scripts/pre-destroy.sh` runs: deletes CloudWatch alarms created by the alarm Lambda, then deletes all Studio apps and spaces (they block domain deletion)
 2. Waits for apps to finish deleting (~2-5 minutes)
 3. Terraform destroys domain, profiles, team resources, Lambdas, EventBridge rules
 4. S3 buckets, ECR repos, and Budgets are deleted (EFS set to `Delete` retention)
@@ -443,7 +443,7 @@ All tests use mocked boto3 clients (no AWS API calls).
 
 5. **Reaper Lambda is scheduled, not real-time**: Idle resources are cleaned up daily at 2 AM UTC. For faster cleanup, change the EventBridge schedule in `modules/reaper-lambda/main.tf`.
 
-6. **Smoke test assume-role**: Isolation tests require deploying principal to assume team roles. Disable `enable_smoke_test_assume` in production or provide a dedicated test IAM user. The trust principal from `aws_caller_identity` may be an assumed-role session ARN for SSO/assumed-role callers; normalize it to the role ARN or use an explicit variable.
+6. **Smoke test assume-role**: Isolation tests require deploying principal to assume team roles. Disable `enable_smoke_test_assume` in production or provide a dedicated test IAM user. For root account callers, the smoke test automatically creates a temporary IAM user for testing (cleaned up after). The trust policy allows the deploying principal and temporary smoke test users (named `sagemaker-smoke-test-*`). For SSO/assumed-role callers, note that `aws_caller_identity` returns the session ARN; you may need to normalize it or use an explicit variable.
 
 7. **Default VPC dependency**: By default, the starter uses your account's default VPC. If you've deleted it, provide explicit `vpc_id` and `subnet_ids`.
 
@@ -453,15 +453,11 @@ All tests use mocked boto3 clients (no AWS API calls).
 
 10. **Multi-region not supported**: All resources are in one region (`var.aws_region`). For multi-region, duplicate the root module per region.
 
-11. **Alarms are not Terraform-managed**: CloudWatch alarms are created at runtime by the endpoint alarm Lambda and are not in Terraform state. To clean up alarms during destroy, manually delete alarms with names matching `*-5xx-errors`, `*-high-latency`, `*-invocation-drop` or add a pre-destroy script to delete alarms by prefix.
+11. **Domain security group and EFS ENIs**: After Terraform destroy, the domain security group and EFS ENIs may take a few minutes to be removed by AWS. This is normal and does not affect cleanup.
 
-12. **Lambda log groups persist after destroy**: CloudWatch log groups for Lambdas (`/aws/lambda/sagemaker-platform-*`) are not managed by Terraform and will persist after destroy unless manually deleted.
+12. **Reaper doesn't delete new endpoints**: Endpoints younger than the idle window (7 days by default) are skipped even if they have zero invocations, to avoid false positives.
 
-13. **Domain security group and EFS ENIs**: After Terraform destroy, the domain security group and EFS ENIs may take a few minutes to be removed by AWS. This is normal and does not affect cleanup.
-
-14. **Reaper doesn't delete new endpoints**: Endpoints younger than the idle window (7 days by default) are skipped even if they have zero invocations, to avoid false positives.
-
-15. **Default execution role is minimal**: The domain default execution role has minimal permissions. Users should always use their team-specific execution roles for actual work.
+13. **Default execution role is minimal**: The domain default execution role has minimal permissions. Users should always use their team-specific execution roles for actual work.
 
 ---
 

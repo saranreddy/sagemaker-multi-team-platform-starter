@@ -49,7 +49,9 @@ def lambda_handler(event, context):
         
         print(f"Processing endpoint: {endpoint_name} (status={endpoint_status})")
         
-        if endpoint_status != 'IN_SERVICE':
+        # Normalize status for comparison (handle both InService and IN_SERVICE)
+        normalized_status = endpoint_status.replace('_', '').upper()
+        if normalized_status != 'INSERVICE':
             print(f"Endpoint not in service, skipping alarm creation")
             return {'statusCode': 200, 'body': 'Skipped - not in service'}
         
