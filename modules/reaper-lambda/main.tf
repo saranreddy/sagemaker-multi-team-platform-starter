@@ -51,10 +51,12 @@ resource "aws_iam_role_policy" "reaper_lambda_permissions" {
         Action = [
           "sagemaker:ListEndpoints",
           "sagemaker:DescribeEndpoint",
+          "sagemaker:DescribeEndpointConfig",
           "sagemaker:ListApps",
           "sagemaker:DescribeApp",
           "sagemaker:ListUserProfiles",
-          "sagemaker:DescribeUserProfile"
+          "sagemaker:DescribeUserProfile",
+          "sagemaker:ListTags"
         ]
         Resource = "*"
       },

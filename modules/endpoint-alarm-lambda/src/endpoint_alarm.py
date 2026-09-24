@@ -49,7 +49,7 @@ def lambda_handler(event, context):
         
         print(f"Processing endpoint: {endpoint_name} (status={endpoint_status})")
         
-        if endpoint_status != 'InService':
+        if endpoint_status != 'IN_SERVICE':
             print(f"Endpoint not in service, skipping alarm creation")
             return {'statusCode': 200, 'body': 'Skipped - not in service'}
         
@@ -109,90 +109,109 @@ def get_endpoint_team(endpoint_name: str) -> Optional[str]:
 def create_endpoint_alarms(endpoint_name: str, team: str, sns_topic_arn: str):
     """Create standard CloudWatch alarms for the endpoint."""
     cloudwatch = get_cloudwatch_client()
+    sagemaker = get_sagemaker_client()
     
-    # Alarm 1: Model invocation 5XX errors
+    # Get endpoint variants for dimensions
     try:
-        cloudwatch.put_metric_alarm(
-            AlarmName=f"{endpoint_name}-5xx-errors",
-            AlarmDescription=f"Alert on 5XX errors for {endpoint_name} (team={team})",
-            ActionsEnabled=True,
-            AlarmActions=[sns_topic_arn],
-            MetricName='ModelInvocation5XXErrors',
-            Namespace='AWS/SageMaker',
-            Statistic='Sum',
-            Dimensions=[
-                {'Name': 'EndpointName', 'Value': endpoint_name}
-            ],
-            Period=300,  # 5 minutes
-            EvaluationPeriods=1,
-            Threshold=1.0,
-            ComparisonOperator='GreaterThanThreshold',
-            TreatMissingData='notBreaching',
-            Tags=[
-                {'Key': 'Team', 'Value': team},
-                {'Key': 'ManagedBy', 'Value': 'terraform'},
-                {'Key': 'EndpointName', 'Value': endpoint_name}
-            ]
-        )
-        print(f"Created 5XX error alarm for {endpoint_name}")
+        endpoint_desc = sagemaker.describe_endpoint(EndpointName=endpoint_name)
+        endpoint_config_name = endpoint_desc['EndpointConfigName']
+        
+        endpoint_config = sagemaker.describe_endpoint_config(EndpointConfigName=endpoint_config_name)
+        variants = [variant['VariantName'] for variant in endpoint_config['ProductionVariants']]
     except Exception as e:
-        print(f"Error creating 5XX alarm: {e}")
+        print(f"Error getting endpoint variants: {e}, using AllTraffic as fallback")
+        variants = ['AllTraffic']
     
-    # Alarm 2: Model latency (p90)
-    try:
-        cloudwatch.put_metric_alarm(
-            AlarmName=f"{endpoint_name}-high-latency",
-            AlarmDescription=f"Alert on high latency for {endpoint_name} (team={team})",
-            ActionsEnabled=True,
-            AlarmActions=[sns_topic_arn],
-            MetricName='ModelLatency',
-            Namespace='AWS/SageMaker',
-            ExtendedStatistic='p90',
-            Dimensions=[
-                {'Name': 'EndpointName', 'Value': endpoint_name}
-            ],
-            Period=300,  # 5 minutes
-            EvaluationPeriods=2,
-            Threshold=10000.0,  # 10 seconds in milliseconds
-            ComparisonOperator='GreaterThanThreshold',
-            TreatMissingData='notBreaching',
-            Tags=[
-                {'Key': 'Team', 'Value': team},
-                {'Key': 'ManagedBy', 'Value': 'terraform'},
-                {'Key': 'EndpointName', 'Value': endpoint_name}
-            ]
-        )
-        print(f"Created latency alarm for {endpoint_name}")
-    except Exception as e:
-        print(f"Error creating latency alarm: {e}")
-    
-    # Alarm 3: Invocation drop (optional - detects if traffic suddenly drops)
-    try:
-        cloudwatch.put_metric_alarm(
-            AlarmName=f"{endpoint_name}-invocation-drop",
-            AlarmDescription=f"Alert on invocation drop for {endpoint_name} (team={team})",
-            ActionsEnabled=True,
-            AlarmActions=[sns_topic_arn],
-            MetricName='Invocations',
-            Namespace='AWS/SageMaker',
-            Statistic='Sum',
-            Dimensions=[
-                {'Name': 'EndpointName', 'Value': endpoint_name}
-            ],
-            Period=3600,  # 1 hour
-            EvaluationPeriods=1,
-            Threshold=1.0,
-            ComparisonOperator='LessThanThreshold',
-            TreatMissingData='notBreaching',
-            Tags=[
-                {'Key': 'Team', 'Value': team},
-                {'Key': 'ManagedBy', 'Value': 'terraform'},
-                {'Key': 'EndpointName', 'Value': endpoint_name}
-            ]
-        )
-        print(f"Created invocation drop alarm for {endpoint_name}")
-    except Exception as e:
-        print(f"Error creating invocation drop alarm: {e}")
+    for variant_name in variants:
+        # Alarm 1: Model invocation 5XX errors
+        try:
+            cloudwatch.put_metric_alarm(
+                AlarmName=f"{endpoint_name}-{variant_name}-5xx-errors",
+                AlarmDescription=f"Alert on 5XX errors for {endpoint_name}/{variant_name} (team={team})",
+                ActionsEnabled=True,
+                AlarmActions=[sns_topic_arn],
+                MetricName='Invocation5XXErrors',
+                Namespace='AWS/SageMaker',
+                Statistic='Sum',
+                Dimensions=[
+                    {'Name': 'EndpointName', 'Value': endpoint_name},
+                    {'Name': 'VariantName', 'Value': variant_name}
+                ],
+                Period=300,  # 5 minutes
+                EvaluationPeriods=1,
+                Threshold=1.0,
+                ComparisonOperator='GreaterThanThreshold',
+                TreatMissingData='notBreaching',
+                Tags=[
+                    {'Key': 'Team', 'Value': team},
+                    {'Key': 'ManagedBy', 'Value': 'terraform'},
+                    {'Key': 'EndpointName', 'Value': endpoint_name},
+                    {'Key': 'VariantName', 'Value': variant_name}
+                ]
+            )
+            print(f"Created 5XX error alarm for {endpoint_name}/{variant_name}")
+        except Exception as e:
+            print(f"Error creating 5XX alarm: {e}")
+        
+        # Alarm 2: Model latency (p90) - in microseconds
+        try:
+            cloudwatch.put_metric_alarm(
+                AlarmName=f"{endpoint_name}-{variant_name}-high-latency",
+                AlarmDescription=f"Alert on high latency for {endpoint_name}/{variant_name} (team={team})",
+                ActionsEnabled=True,
+                AlarmActions=[sns_topic_arn],
+                MetricName='ModelLatency',
+                Namespace='AWS/SageMaker',
+                ExtendedStatistic='p90',
+                Dimensions=[
+                    {'Name': 'EndpointName', 'Value': endpoint_name},
+                    {'Name': 'VariantName', 'Value': variant_name}
+                ],
+                Period=300,  # 5 minutes
+                EvaluationPeriods=2,
+                Threshold=10000000.0,  # 10 seconds in microseconds
+                ComparisonOperator='GreaterThanThreshold',
+                TreatMissingData='notBreaching',
+                Tags=[
+                    {'Key': 'Team', 'Value': team},
+                    {'Key': 'ManagedBy', 'Value': 'terraform'},
+                    {'Key': 'EndpointName', 'Value': endpoint_name},
+                    {'Key': 'VariantName', 'Value': variant_name}
+                ]
+            )
+            print(f"Created latency alarm for {endpoint_name}/{variant_name}")
+        except Exception as e:
+            print(f"Error creating latency alarm: {e}")
+        
+        # Alarm 3: Invocation drop (optional - detects if traffic suddenly drops)
+        try:
+            cloudwatch.put_metric_alarm(
+                AlarmName=f"{endpoint_name}-{variant_name}-invocation-drop",
+                AlarmDescription=f"Alert on invocation drop for {endpoint_name}/{variant_name} (team={team})",
+                ActionsEnabled=True,
+                AlarmActions=[sns_topic_arn],
+                MetricName='Invocations',
+                Namespace='AWS/SageMaker',
+                Statistic='Sum',
+                Dimensions=[
+                    {'Name': 'EndpointName', 'Value': endpoint_name},
+                    {'Name': 'VariantName', 'Value': variant_name}
+                ],
+                Period=3600,  # 1 hour
+                EvaluationPeriods=1,
+                Threshold=1.0,
+                ComparisonOperator='LessThanThreshold',
+                TreatMissingData='notBreaching',
+                Tags=[
+                    {'Key': 'Team', 'Value': team},
+                    {'Key': 'ManagedBy', 'Value': 'terraform'},
+                    {'Key': 'EndpointName', 'Value': endpoint_name},
+                    {'Key': 'VariantName', 'Value': variant_name}
+                ]
+            )
+            print(f"Created invocation drop alarm for {endpoint_name}/{variant_name}")
+        except Exception as e:
+            print(f"Error creating invocation drop alarm: {e}")
 
 
 def alert_untagged_endpoint(endpoint_name: str):

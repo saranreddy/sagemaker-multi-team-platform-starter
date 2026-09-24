@@ -96,29 +96,21 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Configure AWS Credentials
-        if: env.AWS_ACCESS_KEY_ID != ''
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
 
       - name: Terraform Init
-        if: env.AWS_ACCESS_KEY_ID != ''
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
         run: terraform init
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
 
       - name: Terraform Plan
-        if: env.AWS_ACCESS_KEY_ID != ''
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' }}
         run: terraform plan -no-color
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
 
       - name: Skip Plan (No AWS Credentials)
-        if: env.AWS_ACCESS_KEY_ID == ''
+        if: ${{ secrets.AWS_ACCESS_KEY_ID == '' }}
         run: echo "Skipping plan - no AWS credentials configured"
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

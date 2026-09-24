@@ -95,6 +95,13 @@ else
     echo "  ⚠ pytest not installed (needed for 'make test')"
 fi
 
+if command -v jq >/dev/null 2>&1; then
+    JQ_VERSION=$(jq --version 2>&1)
+    echo "  ✓ jq: $JQ_VERSION"
+else
+    echo "  ⚠ jq not installed (needed for 'make smoke')"
+fi
+
 echo ""
 
 # Summary

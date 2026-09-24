@@ -111,7 +111,7 @@ resource "aws_cloudwatch_event_rule" "endpoint_state_change" {
     source      = ["aws.sagemaker"]
     detail-type = ["SageMaker Endpoint State Change"]
     detail = {
-      EndpointStatus = ["InService"]
+      EndpointStatus = ["IN_SERVICE"]
     }
   })
 

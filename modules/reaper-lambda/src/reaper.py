@@ -95,6 +95,13 @@ def find_idle_endpoints() -> List[Dict]:
         for page in paginator.paginate(StatusEquals='InService'):
             for endpoint in page['Endpoints']:
                 endpoint_name = endpoint['EndpointName']
+                creation_time = endpoint['CreationTime']
+                
+                # Skip endpoints younger than the idle window
+                age_days = (datetime.now(creation_time.tzinfo) - creation_time).days
+                if age_days < ENDPOINT_IDLE_DAYS:
+                    print(f"Skipping {endpoint_name}: only {age_days} days old (threshold {ENDPOINT_IDLE_DAYS})")
+                    continue
                 
                 # Get tags to determine team ownership
                 try:
@@ -107,17 +114,25 @@ def find_idle_endpoints() -> List[Dict]:
                     print(f"Error getting tags for {endpoint_name}: {e}")
                     team = 'unknown'
                 
-                # Check invocation metrics
-                invocations = get_endpoint_invocations(endpoint_name)
+                # Get variants for metric query
+                variants = get_endpoint_variants(endpoint_name)
                 
-                if invocations == 0:
+                # Check invocation metrics across all variants
+                total_invocations = 0
+                for variant in variants:
+                    invocations = get_endpoint_invocations(endpoint_name, variant)
+                    if invocations >= 0:  # Only count if we got valid data
+                        total_invocations += invocations
+                
+                if total_invocations == 0:
                     idle_endpoints.append({
                         'name': endpoint_name,
                         'team': team,
-                        'created': endpoint['CreationTime'],
-                        'invocations': invocations
+                        'created': creation_time,
+                        'invocations': total_invocations,
+                        'age_days': age_days
                     })
-                    print(f"Found idle endpoint: {endpoint_name} (team={team})")
+                    print(f"Found idle endpoint: {endpoint_name} (team={team}, age={age_days}d)")
     
     except Exception as e:
         print(f"Error listing endpoints: {e}")
@@ -125,18 +140,33 @@ def find_idle_endpoints() -> List[Dict]:
     return idle_endpoints
 
 
-def get_endpoint_invocations(endpoint_name: str) -> int:
-    """Get total invocations for an endpoint over the idle period."""
+def get_endpoint_variants(endpoint_name: str) -> List[str]:
+    """Get variant names for an endpoint."""
+    sagemaker = get_sagemaker_client()
+    try:
+        endpoint_desc = sagemaker.describe_endpoint(EndpointName=endpoint_name)
+        endpoint_config_name = endpoint_desc['EndpointConfigName']
+        
+        endpoint_config = sagemaker.describe_endpoint_config(EndpointConfigName=endpoint_config_name)
+        return [variant['VariantName'] for variant in endpoint_config['ProductionVariants']]
+    except Exception as e:
+        print(f"Error getting variants for {endpoint_name}: {e}")
+        return ['AllTraffic']  # Fallback
+
+
+def get_endpoint_invocations(endpoint_name: str, variant_name: str) -> int:
+    """Get total invocations for an endpoint variant over the idle period."""
     cloudwatch = get_cloudwatch_client()
     try:
-        end_time = datetime.utcnow()
+        end_time = datetime.now(datetime.now().astimezone().tzinfo)
         start_time = end_time - timedelta(days=ENDPOINT_IDLE_DAYS)
         
         response = cloudwatch.get_metric_statistics(
             Namespace='AWS/SageMaker',
             MetricName='Invocations',
             Dimensions=[
-                {'Name': 'EndpointName', 'Value': endpoint_name}
+                {'Name': 'EndpointName', 'Value': endpoint_name},
+                {'Name': 'VariantName', 'Value': variant_name}
             ],
             StartTime=start_time,
             EndTime=end_time,
@@ -148,7 +178,7 @@ def get_endpoint_invocations(endpoint_name: str) -> int:
         return int(total)
     
     except Exception as e:
-        print(f"Error getting metrics for {endpoint_name}: {e}")
+        print(f"Error getting metrics for {endpoint_name}/{variant_name}: {e}")
         return -1  # Return -1 to indicate error (don't delete on error)
 
 
@@ -185,7 +215,7 @@ def find_idle_studio_apps() -> List[Dict]:
                                                    app_details.get('CreationTime'))
                     
                     if last_modified:
-                        age_hours = (datetime.utcnow().replace(tzinfo=last_modified.tzinfo) - last_modified).total_seconds() / 3600
+                        age_hours = (datetime.now(last_modified.tzinfo) - last_modified).total_seconds() / 3600
                         
                         if age_hours > STUDIO_APP_IDLE_HOURS:
                             # Extract team from user profile tags

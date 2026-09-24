@@ -22,6 +22,11 @@ if ! command -v terraform >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v jq >/dev/null 2>&1; then
+    echo "✗ jq not found (required for parsing JSON)"
+    exit 1
+fi
+
 # Get outputs from Terraform
 echo "Fetching Terraform outputs..."
 OUTPUTS=$(terraform output -json)
@@ -116,7 +121,7 @@ if [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
     # Assume team A role
     CREDS=$("$AWS_CMD" sts assume-role --role-arn "$ROLE_A" --role-session-name smoke-test --output json 2>&1)
     
-    if echo "$CREDS" | grep -q "AccessKeyId"; then
+    if echo "$CREDS" | jq -e '.Credentials.AccessKeyId' >/dev/null 2>&1; then
         export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r '.Credentials.AccessKeyId')
         export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Credentials.SessionToken')
@@ -140,9 +145,9 @@ if [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
             ERRORS=$((ERRORS + 1))
         fi
         
-        # Test access to team B bucket (should be denied)
+        # Test access to team B bucket (should be denied) - CRITICAL TEST
         if echo "test" | "$AWS_CMD" s3 cp - "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" >/dev/null 2>&1; then
-            echo "    ✗ Team A can write to Team B bucket (isolation breach!)"
+            echo "    ✗ ISOLATION BREACH: Team A can write to Team B bucket!"
             ERRORS=$((ERRORS + 1))
             # Clean up if somehow succeeded
             "$AWS_CMD" s3 rm "s3://$BUCKET_B/$TEST_FILE" --region "$REGION" >/dev/null 2>&1 || true
@@ -153,7 +158,9 @@ if [ ${#TEAMS_ARRAY[@]} -ge 2 ]; then
         # Clear credentials
         unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
     else
-        echo "    ⚠ Cannot assume role (enable_smoke_test_assume may be false)"
+        echo "    ✗ FAILED: Cannot assume role $ROLE_A"
+        echo "    This is a critical failure when enable_smoke_test_assume=true"
+        ERRORS=$((ERRORS + 1))
     fi
 else
     echo "  ⚠ Need at least 2 teams to test isolation"
@@ -176,8 +183,10 @@ if "$AWS_CMD" lambda get-function --function-name "$REAPER_LAMBDA" --region "$RE
     
     if [ $? -eq 0 ]; then
         echo "    ✓ Reaper Lambda invocation successful"
-        REAPER_STATUS=$(jq -r '.statusCode' /tmp/reaper-output.json 2>/dev/null || echo "unknown")
-        echo "      Status code: $REAPER_STATUS"
+        if [ -f /tmp/reaper-output.json ]; then
+            REAPER_STATUS=$(jq -r '.statusCode' /tmp/reaper-output.json 2>/dev/null || echo "unknown")
+            echo "      Status code: $REAPER_STATUS"
+        fi
     else
         echo "    ✗ Reaper Lambda invocation failed"
         ERRORS=$((ERRORS + 1))

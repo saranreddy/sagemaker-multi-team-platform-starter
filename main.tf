@@ -31,6 +31,30 @@ resource "aws_sns_topic" "platform_alerts" {
   }
 }
 
+resource "aws_sns_topic_policy" "platform_alerts_budgets" {
+  arn = aws_sns_topic.platform_alerts.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowBudgetsPublish"
+        Effect = "Allow"
+        Principal = {
+          Service = "budgets.amazonaws.com"
+        }
+        Action   = "SNS:Publish"
+        Resource = aws_sns_topic.platform_alerts.arn
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
 resource "aws_sns_topic_subscription" "platform_alerts" {
   count = length(var.platform_alert_emails)
 
@@ -53,18 +77,20 @@ resource "aws_sagemaker_domain" "main" {
       default_resource_spec {
         instance_type = "system"
       }
-
-      lifecycle_config_arns = [aws_sagemaker_studio_lifecycle_config.idle_shutdown.arn]
     }
 
     kernel_gateway_app_settings {
       default_resource_spec {
         instance_type = "ml.t3.medium"
       }
-
-      lifecycle_config_arns = [aws_sagemaker_studio_lifecycle_config.idle_shutdown.arn]
     }
   }
+
+  default_space_settings {
+    execution_role = aws_iam_role.studio_default.arn
+  }
+
+  app_network_access_type = "VpcOnly"
 
   retention_policy {
     home_efs_file_system = "Delete"
@@ -75,16 +101,7 @@ resource "aws_sagemaker_domain" "main" {
   }
 }
 
-# Studio lifecycle configuration for idle shutdown
-resource "aws_sagemaker_studio_lifecycle_config" "idle_shutdown" {
-  studio_lifecycle_config_name     = "${var.project_name}-idle-shutdown"
-  studio_lifecycle_config_app_type = "JupyterServer"
-  studio_lifecycle_config_content = base64encode(templatefile("${path.module}/templates/idle-shutdown.sh", {
-    idle_timeout_minutes = var.studio_idle_timeout_minutes
-  }))
-}
-
-# Default Studio execution role (fallback only)
+# Default Studio execution role (fallback only - minimal permissions)
 resource "aws_iam_role" "studio_default" {
   name = "${var.project_name}-studio-default-role"
 
@@ -106,9 +123,36 @@ resource "aws_iam_role" "studio_default" {
   }
 }
 
-resource "aws_iam_role_policy_attachment" "studio_default_policy" {
-  role       = aws_iam_role.studio_default.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSageMakerFullAccess"
+# Minimal policy for default role - users should use team roles
+resource "aws_iam_role_policy" "studio_default_minimal" {
+  name = "minimal-studio-access"
+  role = aws_iam_role.studio_default.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "MinimalStudioAccess"
+        Effect = "Allow"
+        Action = [
+          "sagemaker:DescribeDomain",
+          "sagemaker:DescribeUserProfile",
+          "sagemaker:ListTags"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "CloudWatchLogsForStudio"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:${data.aws_partition.current.partition}:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/sagemaker/*"
+      }
+    ]
+  })
 }
 
 # Create team resources

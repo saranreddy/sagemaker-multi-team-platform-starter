@@ -73,12 +73,6 @@ variable "reaper_studio_app_idle_hours" {
   default     = 24
 }
 
-variable "studio_idle_timeout_minutes" {
-  description = "Automatic idle shutdown timeout for Studio apps (in minutes)"
-  type        = number
-  default     = 60
-}
-
 variable "enable_smoke_test_assume" {
   description = "If true, allows the deploying principal to assume team roles for smoke testing. Set to false in production."
   type        = bool

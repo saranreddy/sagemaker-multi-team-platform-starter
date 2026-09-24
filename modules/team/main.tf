@@ -3,7 +3,6 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  team_tag = "team:${var.team_name}"
 
   assume_role_principals = var.enable_smoke_test_assume ? [
     {
@@ -32,6 +31,30 @@ resource "aws_sns_topic" "team_alerts" {
   }
 }
 
+resource "aws_sns_topic_policy" "team_alerts_budgets" {
+  arn = aws_sns_topic.team_alerts.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowBudgetsPublish"
+        Effect = "Allow"
+        Principal = {
+          Service = "budgets.amazonaws.com"
+        }
+        Action   = "SNS:Publish"
+        Resource = aws_sns_topic.team_alerts.arn
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
 resource "aws_sns_topic_subscription" "team_email_alerts" {
   count = length(var.email_alerts)
 
@@ -42,7 +65,8 @@ resource "aws_sns_topic_subscription" "team_email_alerts" {
 
 # S3 bucket for team data with enforced team prefix
 resource "aws_s3_bucket" "team_data" {
-  bucket = "${var.project_name}-${var.team_name}-data-${data.aws_caller_identity.current.account_id}"
+  bucket        = "${var.project_name}-${var.team_name}-data-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
 
   tags = {
     Name = "${var.project_name}-${var.team_name}-data"
@@ -79,7 +103,8 @@ resource "aws_s3_bucket_public_access_block" "team_data" {
 
 # ECR repository for team's container images
 resource "aws_ecr_repository" "team_models" {
-  name = "${var.project_name}/${var.team_name}/models"
+  name         = "${var.project_name}/${var.team_name}/models"
+  force_delete = true
 
   image_scanning_configuration {
     scan_on_push = true
@@ -206,44 +231,73 @@ resource "aws_iam_role_policy" "team_execution_core" {
         ]
         Resource = "*"
       },
-      # SageMaker access with instance type restrictions and team tagging
+      # PassRole for SageMaker jobs - team's own role only
       {
-        Sid    = "SageMakerTrainingAndProcessing"
+        Sid    = "PassRoleForSageMaker"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = aws_iam_role.team_execution.arn
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "sagemaker.amazonaws.com"
+          }
+        }
+      },
+      # SageMaker actions with instance type restrictions
+      {
+        Sid    = "SageMakerWithInstanceTypeRestriction"
         Effect = "Allow"
         Action = [
           "sagemaker:CreateTrainingJob",
           "sagemaker:CreateProcessingJob",
           "sagemaker:CreateTransformJob",
-          "sagemaker:CreateEndpoint",
           "sagemaker:CreateEndpointConfig",
-          "sagemaker:CreateModel"
+          "sagemaker:CreateApp"
         ]
         Resource = "*"
         Condition = {
           "ForAllValues:StringEquals" = {
             "sagemaker:InstanceTypes" = var.allowed_instance_types
           }
+          "Null" = {
+            "sagemaker:InstanceTypes" = "false"
+          }
           StringEquals = {
             "aws:RequestTag/Team" = var.team_name
           }
         }
       },
+      # SageMaker create actions without instance type restrictions
       {
-        Sid    = "SageMakerDescribeAndList"
+        Sid    = "SageMakerCreateResources"
         Effect = "Allow"
         Action = [
-          "sagemaker:Describe*",
-          "sagemaker:List*"
+          "sagemaker:CreateEndpoint",
+          "sagemaker:CreateModel"
         ]
         Resource = "*"
         Condition = {
           StringEquals = {
-            "aws:ResourceTag/Team" = var.team_name
+            "aws:RequestTag/Team" = var.team_name
           }
         }
       },
+      # SageMaker unconditional list and describe
       {
-        Sid    = "SageMakerUpdateDelete"
+        Sid    = "SageMakerListAndDescribe"
+        Effect = "Allow"
+        Action = [
+          "sagemaker:List*",
+          "sagemaker:Describe*",
+          "sagemaker:Search"
+        ]
+        Resource = "*"
+      },
+      # SageMaker update/delete/invoke on team-tagged resources only
+      {
+        Sid    = "SageMakerMutateTeamResources"
         Effect = "Allow"
         Action = [
           "sagemaker:UpdateEndpoint",
@@ -254,7 +308,8 @@ resource "aws_iam_role_policy" "team_execution_core" {
           "sagemaker:StopTrainingJob",
           "sagemaker:StopProcessingJob",
           "sagemaker:StopTransformJob",
-          "sagemaker:InvokeEndpoint"
+          "sagemaker:InvokeEndpoint",
+          "sagemaker:DeleteApp"
         ]
         Resource = "*"
         Condition = {
@@ -263,7 +318,7 @@ resource "aws_iam_role_policy" "team_execution_core" {
           }
         }
       },
-      # Model Package Group access
+      # Model Package Group access - group and packages
       {
         Sid    = "ModelPackageGroupAccess"
         Effect = "Allow"
@@ -272,9 +327,13 @@ resource "aws_iam_role_policy" "team_execution_core" {
           "sagemaker:UpdateModelPackage",
           "sagemaker:DescribeModelPackage",
           "sagemaker:ListModelPackages",
-          "sagemaker:DeleteModelPackage"
+          "sagemaker:DeleteModelPackage",
+          "sagemaker:DescribeModelPackageGroup"
         ]
-        Resource = aws_sagemaker_model_package_group.team_registry.arn
+        Resource = [
+          aws_sagemaker_model_package_group.team_registry.arn,
+          "${aws_sagemaker_model_package_group.team_registry.arn}/*"
+        ]
       },
       # CloudWatch Logs
       {
@@ -335,7 +394,7 @@ resource "aws_budgets_budget" "team_monthly" {
   cost_filter {
     name = "TagKeyValue"
     values = [
-      "Team$${var.team_name}"
+      format("user:Team$%s", var.team_name)
     ]
   }
 

@@ -183,7 +183,7 @@ Team members sign in via IAM, select their profile (`forecasting-eve`), and star
 | **Studio EFS storage** | ~$0.30/GB-month | ~$0.30/GB-month | [EFS pricing](https://aws.amazon.com/efs/pricing/) — charged per GB stored |
 | **Studio notebooks/apps** | $0 | Instance pricing | [SageMaker Studio pricing](https://aws.amazon.com/sagemaker/pricing/) — `ml.t3.medium` ~$0.05/hr, only when running |
 | **S3 buckets** | ~$0.023/GB-month | ~$0.023/GB-month | [S3 Standard pricing](https://aws.amazon.com/s3/pricing/) — pay for storage used |
-| **ECR repositories** | ~$0.10/GB-month | ~$0.10/GB-month | [ECR pricing](https://aws.amazon.com/ecr/pricing/) — 0.5 GB free, then $0.10/GB-month |
+| **ECR repositories** | ~$0.10/GB-month (approx) | ~$0.10/GB-month (approx) | [ECR pricing](https://aws.amazon.com/ecr/pricing/) — 0.5 GB free, then $0.10/GB-month |
 | **Model Package Groups** | $0 | $0 | Metadata only, no charge |
 | **Lambda (reaper + alarm)** | ~$0.00 | ~$0.00 | [Lambda free tier](https://aws.amazon.com/lambda/pricing/): 1M requests free/month |
 | **EventBridge rules** | ~$0.00 | ~$0.00 | [EventBridge pricing](https://aws.amazon.com/eventbridge/pricing/): custom events ~$1/million |
@@ -194,7 +194,7 @@ Team members sign in via IAM, select their profile (`forecasting-eve`), and star
 **Summary:**
 - **Idle cost (zero workloads)**: Near $0 — only small EFS storage (~few cents if user homes are empty) and Budgets ($0.02/team if > 2 teams)
 - **Active cost**: Pay only for compute you use (notebooks, training jobs, endpoints)
-- **Example**: 2 teams, 10 GB EFS, 5 GB ECR images = ~$3.50/month idle
+- **Example**: 2 teams, 10 GB EFS (approx), 5 GB ECR images (approx) = ~$3.50/month idle
 
 **Important:** Cost allocation tags (for Budgets) must be [activated in AWS Billing Console](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/activating-tags.html) and can take up to 24 hours to appear.
 
@@ -257,7 +257,6 @@ terraform output studio_domain_url
 | `reaper_enabled` | `false` | If `true`, reaper **deletes** idle resources; if `false`, only reports |
 | `reaper_endpoint_idle_days` | `7` | Days with zero invocations before endpoint is idle |
 | `reaper_studio_app_idle_hours` | `24` | Hours idle before Studio app is flagged |
-| `studio_idle_timeout_minutes` | `60` | Auto-shutdown timeout for Studio apps |
 | `enable_smoke_test_assume` | `true` | Allow deploying principal to assume team roles (disable in prod) |
 | `platform_alert_emails` | `[]` | Emails for platform alerts (untagged resources, errors) |
 
@@ -434,7 +433,7 @@ All tests use mocked boto3 clients (no AWS API calls).
 
 ## Known Limitations
 
-1. **Studio domain destroy order**: Studio apps/spaces must be deleted before user profiles and domain. The `pre-destroy.sh` script handles this, but if it fails or is skipped, destroy will hang. Manually delete apps via console or CLI if needed.
+1. **Studio domain destroy order**: Studio apps and spaces must be deleted before user profiles and domain. The `pre-destroy.sh` script handles this automatically, but if it fails or is skipped, destroy will hang. Manually delete apps and spaces via console or CLI if needed.
 
 2. **Cost allocation tags take 24h**: AWS Budgets filtered by `Team` tag won't work until the tag is activated in Billing Console and propagates (up to 24 hours).
 
@@ -444,7 +443,7 @@ All tests use mocked boto3 clients (no AWS API calls).
 
 5. **Reaper Lambda is scheduled, not real-time**: Idle resources are cleaned up daily at 2 AM UTC. For faster cleanup, change the EventBridge schedule in `modules/reaper-lambda/main.tf`.
 
-6. **Smoke test assume-role**: Isolation tests require deploying principal to assume team roles. Disable `enable_smoke_test_assume` in production or provide a dedicated test IAM user.
+6. **Smoke test assume-role**: Isolation tests require deploying principal to assume team roles. Disable `enable_smoke_test_assume` in production or provide a dedicated test IAM user. The trust principal from `aws_caller_identity` may be an assumed-role session ARN for SSO/assumed-role callers; normalize it to the role ARN or use an explicit variable.
 
 7. **Default VPC dependency**: By default, the starter uses your account's default VPC. If you've deleted it, provide explicit `vpc_id` and `subnet_ids`.
 
@@ -453,6 +452,16 @@ All tests use mocked boto3 clients (no AWS API calls).
 9. **SageMaker Projects not included**: This starter does not configure SageMaker Projects (MLOps templates). Add `aws_sagemaker_project` resources if needed.
 
 10. **Multi-region not supported**: All resources are in one region (`var.aws_region`). For multi-region, duplicate the root module per region.
+
+11. **Alarms are not Terraform-managed**: CloudWatch alarms are created at runtime by the endpoint alarm Lambda and are not in Terraform state. To clean up alarms during destroy, manually delete alarms with names matching `*-5xx-errors`, `*-high-latency`, `*-invocation-drop` or add a pre-destroy script to delete alarms by prefix.
+
+12. **Lambda log groups persist after destroy**: CloudWatch log groups for Lambdas (`/aws/lambda/sagemaker-platform-*`) are not managed by Terraform and will persist after destroy unless manually deleted.
+
+13. **Domain security group and EFS ENIs**: After Terraform destroy, the domain security group and EFS ENIs may take a few minutes to be removed by AWS. This is normal and does not affect cleanup.
+
+14. **Reaper doesn't delete new endpoints**: Endpoints younger than the idle window (7 days by default) are skipped even if they have zero invocations, to avoid false positives.
+
+15. **Default execution role is minimal**: The domain default execution role has minimal permissions. Users should always use their team-specific execution roles for actual work.
 
 ---
 

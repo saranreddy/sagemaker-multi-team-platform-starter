@@ -36,7 +36,6 @@ teams = {
 reaper_enabled               = false  # Set true to enable deletion (defaults to report-only)
 reaper_endpoint_idle_days    = 7
 reaper_studio_app_idle_hours = 24
-studio_idle_timeout_minutes  = 60
 
 # Smoke test settings (disable in production)
 enable_smoke_test_assume = true

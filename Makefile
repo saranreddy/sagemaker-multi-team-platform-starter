@@ -57,11 +57,10 @@ smoke: ## Run smoke tests (requires applied infrastructure)
 
 destroy: ## Destroy all Terraform resources
 	@./scripts/pre-destroy.sh
-	terraform destroy $(APPROVE_FLAG) $(DESTROY_FLAG)
+	terraform destroy $(APPROVE_FLAG)
 
 clean: ## Clean temporary files
 	rm -rf .terraform
-	rm -f .terraform.lock.hcl
 	rm -f terraform.tfstate*
 	rm -rf modules/reaper-lambda/lambda_package.zip
 	rm -rf modules/endpoint-alarm-lambda/lambda_package.zip
