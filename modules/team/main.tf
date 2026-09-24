@@ -3,7 +3,7 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  
+
   # Build trust policy statements - separate for Service and AWS principals to avoid null Condition
   assume_role_statements = concat(
     [
@@ -172,7 +172,7 @@ resource "aws_iam_role" "team_execution" {
   name = "${var.project_name}-${var.team_name}-execution-role"
 
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = local.assume_role_statements
   })
 
