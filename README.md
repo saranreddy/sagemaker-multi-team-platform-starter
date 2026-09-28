@@ -34,74 +34,9 @@ Stop hand-building setups. Stop being paged for every team's models.
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph "AWS Account"
-        subgraph "SageMaker Studio Domain"
-            UP1[User Profile: fraud-alice]
-            UP2[User Profile: fraud-bob]
-            UP3[User Profile: recsys-charlie]
-            UP4[User Profile: recsys-diana]
-        end
-        
-        subgraph "Team: fraud"
-            S3_F[S3 Bucket: fraud-data]
-            ECR_F[ECR Repo: fraud/models]
-            MPG_F[Model Package Group]
-            ROLE_F[IAM Role + ABAC]
-            SNS_F[SNS Topic: fraud-alerts]
-            BUDGET_F[AWS Budget: $1000/mo]
-        end
-        
-        subgraph "Team: recsys"
-            S3_R[S3 Bucket: recsys-data]
-            ECR_R[ECR Repo: recsys/models]
-            MPG_R[Model Package Group]
-            ROLE_R[IAM Role + ABAC]
-            SNS_R[SNS Topic: recsys-alerts]
-            BUDGET_R[AWS Budget: $1500/mo]
-        end
-        
-        subgraph "Platform Automation"
-            REAPER[Reaper Lambda<br/>Daily @ 2am UTC]
-            ALARM[Alarm Lambda<br/>EventBridge trigger]
-            EB[EventBridge Rules]
-            SNS_P[Platform SNS Topic]
-        end
-        
-        UP1 --> ROLE_F
-        UP2 --> ROLE_F
-        UP3 --> ROLE_R
-        UP4 --> ROLE_R
-        
-        ROLE_F -->|Read/Write| S3_F
-        ROLE_F -->|Push/Pull| ECR_F
-        ROLE_F -->|Register| MPG_F
-        ROLE_F -.->|Denied| S3_R
-        
-        ROLE_R -->|Read/Write| S3_R
-        ROLE_R -->|Push/Pull| ECR_R
-        ROLE_R -->|Register| MPG_R
-        ROLE_R -.->|Denied| S3_F
-        
-        BUDGET_F -->|80%, 100%, 90% forecast| SNS_F
-        BUDGET_R -->|80%, 100%, 90% forecast| SNS_R
-        
-        EB -->|Endpoint Created| ALARM
-        ALARM -->|Attach Alarms| SNS_F
-        ALARM -->|Attach Alarms| SNS_R
-        ALARM -->|Untagged| SNS_P
-        
-        REAPER -->|Zero invocations| SNS_F
-        REAPER -->|Zero invocations| SNS_R
-        REAPER -->|Report/Delete| S3_F
-    end
-    
-    style ROLE_F fill:#e1f5ff
-    style ROLE_R fill:#fff4e1
-    style REAPER fill:#ffe1e1
-    style ALARM fill:#ffe1e1
-```
+![AWS Architecture Diagram showing SageMaker multi-team platform with Studio domain, per-team resources (S3, ECR, model registry, IAM roles with ABAC), and platform guardrails (EventBridge rules, alarm Lambda, reaper Lambda)](docs/architecture.png)
+
+The diagram is generated from `docs/architecture.py` (requires `pip install diagrams` and Graphviz; running `python docs/architecture.py` writes `architecture.png` next to the script).
 
 **Key components:**
 
